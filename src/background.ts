@@ -1,10 +1,17 @@
-import { parseMenuResponse, isSupportedDomain } from './parsers'
-import type { CaptureState, RuntimeRequest, RuntimeResponse } from './types'
+import { exportMenuToNewSpreadsheet } from './googleSheets'
+import { isSupportedDomain, parseMenuResponse } from './parsers'
+import type { CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
 
 const STORAGE_KEY = 'captureState'
 const DEBUGGER_VERSION = '1.3'
+const EXPORT_TIMEOUT_ALARM = 'menu-export-timeout'
+const EXPORT_TIMEOUT_MINUTES = 0.5
 
-const emptyState = (): CaptureState => ({ capturing: false })
+const emptyState = (): CaptureState => ({
+  capturing: false,
+  exporting: false,
+  phase: 'idle',
+})
 
 const getState = async (): Promise<CaptureState> => {
   const result = await chrome.storage.local.get(STORAGE_KEY)
@@ -16,7 +23,7 @@ const setState = async (state: CaptureState) => {
   try {
     await chrome.runtime.sendMessage({ type: 'CAPTURE_UPDATED', state })
   } catch {
-    // Popup may be closed. Persisted state is the source of truth.
+    // The popup may be closed. Persisted state is the source of truth.
   }
 }
 
@@ -29,41 +36,76 @@ const detach = async (tabId?: number) => {
   }
 }
 
-const startCapture = async (tabId: number): Promise<CaptureState> => {
+const formatError = (error: unknown) => error instanceof Error ? error.message : String(error)
+
+const getSpreadsheetTitle = (menu: ParsedMenu) => {
+  const provider = menu.provider === 'grab' ? 'Grab' : 'DeliveryK'
+  const restaurant = menu.restaurantId ? ` ${menu.restaurantId}` : ''
+  return `${provider}${restaurant} Menu`
+}
+
+const failExport = async (state: CaptureState, error: unknown) => {
+  await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
+  const next: CaptureState = {
+    capturing: false,
+    exporting: false,
+    phase: 'error',
+    lastCapture: state.lastCapture,
+    lastSheetUrl: state.lastSheetUrl,
+    error: formatError(error),
+  }
+  await setState(next)
+  await detach(state.tabId)
+}
+
+const startExport = async (tabId: number): Promise<CaptureState> => {
   const previous = await getState()
-  if (previous.capturing && previous.tabId !== tabId) await detach(previous.tabId)
-  if (previous.capturing && previous.tabId === tabId) return previous
+  if (previous.exporting) return previous
+
+  const clientId = chrome.runtime.getManifest().oauth2?.client_id ?? ''
+  if (!clientId || clientId.startsWith('REPLACE_ME')) {
+    const next: CaptureState = {
+      capturing: false,
+      exporting: false,
+      phase: 'error',
+      lastCapture: previous.lastCapture,
+      lastSheetUrl: previous.lastSheetUrl,
+      error: 'Google OAuth is not configured. Set oauth2.client_id in public/manifest.json, rebuild, then reload the extension.',
+    }
+    await setState(next)
+    return next
+  }
+
+  if (previous.capturing) await detach(previous.tabId)
 
   try {
     await chrome.debugger.attach({ tabId }, DEBUGGER_VERSION)
     await chrome.debugger.sendCommand({ tabId }, 'Network.enable')
+
     const next: CaptureState = {
       capturing: true,
+      exporting: true,
+      phase: 'capturing',
       tabId,
-      lastCapture: previous.lastCapture,
     }
     await setState(next)
+
+    await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
+    await chrome.alarms.create(EXPORT_TIMEOUT_ALARM, { delayInMinutes: EXPORT_TIMEOUT_MINUTES })
+    await chrome.tabs.reload(tabId)
+
     return next
   } catch (error) {
     const next: CaptureState = {
       capturing: false,
-      lastCapture: previous.lastCapture,
-      error: error instanceof Error ? error.message : String(error),
+      exporting: false,
+      phase: 'error',
+      error: formatError(error),
     }
     await setState(next)
+    await detach(tabId)
     return next
   }
-}
-
-const stopCapture = async (): Promise<CaptureState> => {
-  const previous = await getState()
-  await detach(previous.tabId)
-  const next: CaptureState = {
-    capturing: false,
-    lastCapture: previous.lastCapture,
-  }
-  await setState(next)
-  return next
 }
 
 const decodeBody = (body: string, base64Encoded?: boolean): string => {
@@ -77,7 +119,7 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
   if (source.tabId === undefined) return
 
   const state = await getState()
-  if (!state.capturing || state.tabId !== source.tabId) return
+  if (!state.capturing || !state.exporting || state.tabId !== source.tabId) return
 
   const responseUrl = params?.response?.url as string | undefined
   if (!responseUrl || !isSupportedDomain(responseUrl)) return
@@ -95,15 +137,40 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
     ) as { body?: string; base64Encoded?: boolean }
 
     if (!result?.body) return
+
     const payload = JSON.parse(decodeBody(result.body, result.base64Encoded))
     const parsed = parseMenuResponse(responseUrl, payload)
     if (!parsed || parsed.categories.length === 0) return
 
+    await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
     await setState({
-      capturing: true,
+      capturing: false,
+      exporting: true,
+      phase: 'writing',
       tabId: source.tabId,
       lastCapture: parsed,
     })
+    await detach(source.tabId)
+
+    try {
+      const resultSheet = await exportMenuToNewSpreadsheet(parsed, getSpreadsheetTitle(parsed))
+      const doneState: CaptureState = {
+        capturing: false,
+        exporting: false,
+        phase: 'done',
+        lastCapture: parsed,
+        lastSheetUrl: resultSheet.spreadsheetUrl,
+      }
+      await setState(doneState)
+      await chrome.tabs.create({ url: resultSheet.spreadsheetUrl })
+    } catch (error) {
+      await failExport({
+        capturing: false,
+        exporting: true,
+        phase: 'writing',
+        lastCapture: parsed,
+      }, error)
+    }
   } catch {
     // Most responses are unrelated to menus or may have expired bodies.
   }
@@ -117,11 +184,34 @@ chrome.debugger.onDetach.addListener(source => {
   void (async () => {
     const state = await getState()
     if (source.tabId === state.tabId && state.capturing) {
+      await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
       await setState({
         capturing: false,
+        exporting: false,
+        phase: 'error',
         lastCapture: state.lastCapture,
+        lastSheetUrl: state.lastSheetUrl,
+        error: 'Network capture stopped before a menu response was found.',
       })
     }
+  })()
+})
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== EXPORT_TIMEOUT_ALARM) return
+
+  void (async () => {
+    const state = await getState()
+    if (!state.exporting || !state.capturing || state.phase !== 'capturing') return
+
+    const timeoutState: CaptureState = {
+      capturing: false,
+      exporting: false,
+      phase: 'error',
+      error: 'No supported menu API response was detected within 30 seconds.',
+    }
+    await setState(timeoutState)
+    await detach(state.tabId)
   })()
 })
 
@@ -133,21 +223,8 @@ chrome.runtime.onMessage.addListener((request: RuntimeRequest, _sender, sendResp
         return
       }
 
-      if (request.type === 'START_CAPTURE') {
-        sendResponse({ ok: true, state: await startCapture(request.tabId) } satisfies RuntimeResponse)
-        return
-      }
-
-      if (request.type === 'STOP_CAPTURE') {
-        sendResponse({ ok: true, state: await stopCapture() } satisfies RuntimeResponse)
-        return
-      }
-
-      if (request.type === 'CLEAR_CAPTURE') {
-        const current = await getState()
-        const state: CaptureState = { capturing: current.capturing, tabId: current.tabId }
-        await setState(state)
-        sendResponse({ ok: true, state } satisfies RuntimeResponse)
+      if (request.type === 'EXPORT_CURRENT_TAB') {
+        sendResponse({ ok: true, state: await startExport(request.tabId) } satisfies RuntimeResponse)
         return
       }
 
@@ -155,7 +232,7 @@ chrome.runtime.onMessage.addListener((request: RuntimeRequest, _sender, sendResp
     } catch (error) {
       sendResponse({
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatError(error),
       } satisfies RuntimeResponse)
     }
   })()
