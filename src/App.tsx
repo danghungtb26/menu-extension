@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { MouseEvent } from 'react'
 import { getCaptureSummary } from './flatten'
 import type { CaptureState, RuntimeRequest, RuntimeResponse } from './types'
 
@@ -63,7 +64,7 @@ export const App = () => {
     }
   }
 
-  const openLastSheet = (event: React.MouseEvent<HTMLAnchorElement>) => {
+  const openLastSheet = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault()
     if (state.lastSheetUrl) void chrome.tabs.create({ url: state.lastSheetUrl })
   }
