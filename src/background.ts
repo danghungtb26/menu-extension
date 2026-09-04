@@ -1,6 +1,7 @@
 import { exportMenuViaAppsScript, validateAppsScriptConfig } from './appsScript'
+import { fetchDeliveryKLocaleMenus } from './deliverykLocales'
 import { isSupportedDomain, parseMenuResponse } from './parsers'
-import type { AppsScriptConfig, CaptureState, RuntimeRequest, RuntimeResponse } from './types'
+import type { AppsScriptConfig, CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
 
 const STORAGE_KEY = 'captureState'
 const APPS_SCRIPT_CONFIG_KEY = 'appsScriptConfig'
@@ -155,6 +156,7 @@ const failExport = async (state: CaptureState, error: unknown) => {
     phase: 'error',
     lastCapture: state.lastCapture,
     lastSheetUrl: state.lastSheetUrl,
+    lastExportedLocales: state.lastExportedLocales,
     error: formatError(error),
   }
   await setState(next)
@@ -175,6 +177,7 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
       phase: 'error',
       lastCapture: previous.lastCapture,
       lastSheetUrl: previous.lastSheetUrl,
+      lastExportedLocales: previous.lastExportedLocales,
       error: formatError(error),
     }
     await setState(next)
@@ -224,6 +227,38 @@ const decodeBody = (body: string, base64Encoded?: boolean): string => {
   return new TextDecoder().decode(bytes)
 }
 
+const exportMenus = async (
+  menus: ParsedMenu[],
+  preferredMenu: ParsedMenu,
+  tabId: number,
+): Promise<void> => {
+  const config = await getAppsScriptConfig()
+  let spreadsheetUrl = ''
+
+  for (const menu of menus) {
+    const result = await exportMenuViaAppsScript(menu, config)
+    spreadsheetUrl = result.spreadsheetUrl
+  }
+
+  await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+
+  const doneState: CaptureState = {
+    capturing: false,
+    exporting: false,
+    phase: 'done',
+    lastCapture: preferredMenu,
+    lastSheetUrl: spreadsheetUrl,
+    lastExportedLocales: menus.map(menu => menu.locale || 'default'),
+  }
+  await setState(doneState)
+
+  if (spreadsheetUrl) {
+    await chrome.tabs.create({ url: spreadsheetUrl })
+  }
+
+  await detach(tabId)
+}
+
 const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => {
   if (source.tabId === undefined) return
 
@@ -252,10 +287,12 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
     if (!parsed || parsed.categories.length === 0) return
 
     const context = await getExportPageContext()
-    const enriched = {
+    const storeName = cleanStoreName(context.storeName)
+    const currentLocale = resolveLocale(context, responseUrl)
+    const detected = {
       ...parsed,
-      storeName: cleanStoreName(context.storeName),
-      locale: resolveLocale(context, responseUrl),
+      storeName,
+      locale: currentLocale,
     }
 
     await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
@@ -264,30 +301,27 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
       exporting: true,
       phase: 'writing',
       tabId: source.tabId,
-      lastCapture: enriched,
+      lastCapture: detected,
     })
     await detach(source.tabId)
 
     try {
-      const config = await getAppsScriptConfig()
-      const resultSheet = await exportMenuViaAppsScript(enriched, config)
-      await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
-
-      const doneState: CaptureState = {
-        capturing: false,
-        exporting: false,
-        phase: 'done',
-        lastCapture: enriched,
-        lastSheetUrl: resultSheet.spreadsheetUrl,
+      if (parsed.provider === 'deliveryk') {
+        const menus = await fetchDeliveryKLocaleMenus(responseUrl, storeName)
+        const preferredLanguage = normalizeLocale(currentLocale).split('-')[0]
+        const preferredMenu = menus.find(menu => menu.locale === preferredLanguage) ?? menus[0]
+        await exportMenus(menus, preferredMenu, source.tabId)
+        return
       }
-      await setState(doneState)
-      await chrome.tabs.create({ url: resultSheet.spreadsheetUrl })
+
+      await exportMenus([detected], detected, source.tabId)
     } catch (error) {
       await failExport({
         capturing: false,
         exporting: true,
         phase: 'writing',
-        lastCapture: enriched,
+        lastCapture: detected,
+        tabId: source.tabId,
       }, error)
     }
   } catch {
@@ -311,6 +345,7 @@ chrome.debugger.onDetach.addListener(source => {
         phase: 'error',
         lastCapture: state.lastCapture,
         lastSheetUrl: state.lastSheetUrl,
+        lastExportedLocales: state.lastExportedLocales,
         error: 'Network capture stopped before a menu response was found.',
       })
     }
