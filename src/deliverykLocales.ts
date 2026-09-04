@@ -18,6 +18,19 @@ export const isDeliveryKShopPageUrl = (value: string): boolean => {
 export const findLatestDeliveryKShopPageUrl = (urls: string[]): string | undefined =>
   [...urls].reverse().find(isDeliveryKShopPageUrl)
 
+export const getDeliveryKRestaurantIdFromPageUrl = (value: string): string | undefined => {
+  try {
+    const url = new URL(value)
+    if (!/(^|\.)deliveryk\.com$/i.test(url.hostname)) return undefined
+    return url.pathname.match(/^\/shops\/([^/?#]+)/i)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+export const buildDeliveryKShopPageApiUrl = (restaurantId: string): string =>
+  `https://api.deliveryk.com/api/shop-page/${encodeURIComponent(restaurantId)}/index?width=1825`
+
 export const fetchDeliveryKLocaleMenus = async (
   sourceUrl: string,
   storeName: string,
