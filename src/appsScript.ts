@@ -1,4 +1,4 @@
-import { flattenMenuSheet, flattenToppingsSheet } from './flatten'
+import { flattenToppingsSheet } from './flatten'
 import type { AppsScriptConfig, ParsedMenu } from './types'
 
 interface AppsScriptResponse {
@@ -59,8 +59,7 @@ export const exportMenuViaAppsScript = async (
       secret: config.secret,
       ...identity,
       sourceUrl: menu.sourceUrl,
-      menu: flattenMenuSheet(menu),
-      toppings: flattenToppingsSheet(menu),
+      rows: flattenToppingsSheet(menu),
     }),
   })
 
