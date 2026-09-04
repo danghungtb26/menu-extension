@@ -1,7 +1,13 @@
 import type { MenuCategory, MenuModifierGroup, ParsedMenu } from '../types'
-import { asNumber, firstString, findArray, extractIdFromUrl } from './helpers'
+import { asNumber, extractIdFromUrl, findArray, firstString } from './helpers'
 
 export const isGrabUrl = (url: string) => /(^|\.)grab\.com$/i.test(new URL(url).hostname)
+
+const grabPrice = (value: any): number => asNumber(
+  value?.priceInMinorUnit ??
+  value?.priceV2?.amountInMinor ??
+  value?.price,
+)
 
 const parseGroups = (item: any): MenuModifierGroup[] => {
   const groups = item?.modifierGroups ?? item?.modifier_groups ?? item?.optionSets ?? item?.option_sets
@@ -9,6 +15,7 @@ const parseGroups = (item: any): MenuModifierGroup[] => {
 
   return groups.map((group: any) => {
     const modifiers = group?.modifiers ?? group?.options ?? []
+
     return {
       id: firstString(group?.ID, group?.id),
       name: firstString(group?.name),
@@ -17,23 +24,32 @@ const parseGroups = (item: any): MenuModifierGroup[] => {
         ? modifiers.map((modifier: any) => ({
             id: firstString(modifier?.ID, modifier?.id),
             name: firstString(modifier?.name),
-            price: asNumber(modifier?.priceInMinorUnit ?? modifier?.price),
+            price: grabPrice(modifier),
           }))
         : [],
     }
   })
 }
 
+const hasGrabItems = (value: unknown): value is any[] =>
+  Array.isArray(value) && value.some((entry: any) => Array.isArray(entry?.items))
+
 const findCategories = (payload: unknown): any[] | undefined => {
-  if (Array.isArray(payload) && payload.some((entry: any) => Array.isArray(entry?.items))) {
-    return payload
-  }
+  if (hasGrabItems(payload)) return payload
 
   if (payload && typeof payload === 'object') {
     const root = payload as Record<string, any>
-    const direct = root.categories ?? root.menu?.categories ?? root.data?.categories ?? root.data?.menu?.categories
-    if (Array.isArray(direct) && direct.some((entry: any) => Array.isArray(entry?.items))) {
-      return direct
+    const candidates = [
+      root.categories,
+      root.menu?.categories,
+      root.merchant?.menu?.categories,
+      root.data?.categories,
+      root.data?.menu?.categories,
+      root.data?.merchant?.menu?.categories,
+    ]
+
+    for (const candidate of candidates) {
+      if (hasGrabItems(candidate)) return candidate
     }
   }
 
@@ -48,6 +64,17 @@ const findCategories = (payload: unknown): any[] | undefined => {
   ) as any[] | undefined
 }
 
+const findMerchantId = (categories: any[]): string | undefined => {
+  for (const category of categories) {
+    if (!Array.isArray(category?.items)) continue
+    for (const item of category.items) {
+      const merchantId = firstString(item?.merchantID, item?.merchantId, item?.merchant_id)
+      if (merchantId) return merchantId
+    }
+  }
+  return undefined
+}
+
 export const parseGrab = (url: string, payload: unknown): ParsedMenu | null => {
   const rawCategories = findCategories(payload)
   if (!rawCategories) return null
@@ -60,9 +87,16 @@ export const parseGrab = (url: string, payload: unknown): ParsedMenu | null => {
       ? category.items.map((item: any) => ({
           id: firstString(item?.ID, item?.id),
           name: firstString(item?.name),
-          price: asNumber(item?.priceInMinorUnit ?? item?.price),
+          price: grabPrice(item),
           description: firstString(item?.description, item?.desc),
-          imageUrl: firstString(item?.imgHref, item?.images?.[0], item?.image, item?.imageUrl),
+          imageUrl: firstString(
+            item?.imgHref,
+            item?.thumbImages?.[0],
+            item?.images?.[0],
+            item?.imgHrefFallback,
+            item?.image,
+            item?.imageUrl,
+          ),
           modifierGroups: parseGroups(item),
         }))
       : [],
@@ -70,7 +104,7 @@ export const parseGrab = (url: string, payload: unknown): ParsedMenu | null => {
 
   return {
     provider: 'grab',
-    restaurantId: extractIdFromUrl(url, /merchants\/([^/?]+)/i),
+    restaurantId: extractIdFromUrl(url, /merchants\/([^/?]+)/i) ?? findMerchantId(rawCategories),
     sourceUrl: url,
     capturedAt: new Date().toISOString(),
     categories,
