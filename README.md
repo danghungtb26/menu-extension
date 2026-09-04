@@ -6,7 +6,6 @@ Supported providers in the first version:
 
 - Grab
 - DeliveryK
-- Capichi
 
 ## What it does
 
@@ -75,14 +74,6 @@ Matches the shop-page API shape used by URLs similar to:
 https://api.deliveryk.com/api/shop-page/{restaurantId}/index
 ```
 
-### Capichi
-
-Matches food category responses similar to:
-
-```text
-https://store.capichiapp.com/api/{version}/food_booking/restaurants/{restaurantId}/food_categories
-```
-
 ### Grab
 
 Grab endpoints can change more often, so the parser intentionally does not depend on one hard-coded API path. For JSON responses on `*.grab.com`, it searches for a category array whose entries contain `items`, then normalizes the menu using Grab's `ID`, `priceInMinorUnit`, `modifierGroups`, and related fields.
@@ -112,7 +103,6 @@ src/
   parsers/
     deliveryk.ts
     grab.ts
-    capichi.ts
   App.tsx             Extension popup
 ```
 

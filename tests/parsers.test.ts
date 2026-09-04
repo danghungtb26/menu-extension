@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { parseCapichi } from '../src/parsers/capichi'
 import { parseDeliveryK } from '../src/parsers/deliveryk'
 import { parseGrab } from '../src/parsers/grab'
 import { flattenToppingsSheet, getCaptureSummary } from '../src/flatten'
@@ -54,19 +53,6 @@ describe('menu parsers', () => {
     expect(parsed?.restaurantId).toBe('5-C24WJZLFEJ6HBE')
     expect(parsed?.categories[0].items[0].name).toBe('Coffee')
     expect(getCaptureSummary(parsed!).toppings).toBe(1)
-  })
-
-  it('parses Capichi and keeps empty categories', () => {
-    const parsed = parseCapichi('https://store.capichiapp.com/api/v107/food_booking/restaurants/abc/food_categories?display_all_category=true', {
-      data: [
-        { id: 1, name: 'Lunch', food_items: [{ id: 2, name: 'Rice', price: 90000, image: 'rice.jpg' }] },
-        { id: 3, name: 'Sold out', food_items: [] },
-      ],
-    })
-
-    expect(parsed?.restaurantId).toBe('abc')
-    expect(parsed?.categories).toHaveLength(2)
-    expect(parsed?.categories[1].items).toHaveLength(0)
   })
 
   it('flattens topping rows with readable repeated-field suppression', () => {

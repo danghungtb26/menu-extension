@@ -1,4 +1,4 @@
-export type Provider = 'grab' | 'deliveryk' | 'capichi'
+export type Provider = 'grab' | 'deliveryk'
 
 export interface MenuModifier {
   id: string

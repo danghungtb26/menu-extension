@@ -9,7 +9,6 @@ const sendRequest = async (request: RuntimeRequest): Promise<RuntimeResponse> =>
 const providerLabel: Record<string, string> = {
   grab: 'Grab',
   deliveryk: 'DeliveryK',
-  capichi: 'Capichi',
 }
 
 const formatError = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -122,7 +121,7 @@ export const App = () => {
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">Menu Extractor</p>
           <h1 className="mt-1 text-xl font-bold text-slate-950">Website → Google Sheets</h1>
-          <p className="mt-1 text-xs leading-5 text-slate-500">Grab · DeliveryK · Capichi</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Grab · DeliveryK</p>
         </div>
         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.capturing ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
           {state.capturing ? 'Capturing' : 'Idle'}
