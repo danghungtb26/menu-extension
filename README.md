@@ -1,25 +1,31 @@
 # Menu Extractor to Google Sheets
 
-Chrome Extension (Manifest V3) that captures restaurant menu API responses directly from the current website and exports normalized menu data to a new Google Spreadsheet.
+Chrome Extension (Manifest V3) that exports restaurant menu data from the current website directly to a new Google Spreadsheet.
 
-Supported providers in the first version:
+Supported providers:
 
 - Grab
 - DeliveryK
 
-## What it does
+## One-click export flow
 
-1. Open a restaurant page in Chrome.
-2. Open the extension and click **Start capture + reload**.
-3. The extension attaches to the active tab through `chrome.debugger`, enables the Chrome DevTools Protocol Network domain, and reads matching JSON response bodies.
-4. The response is normalized into Category → Product → Topping Group → Topping.
-5. Review the detected counts and a small preview in the popup.
-6. Click **Export to new Google Sheet**.
-7. A new spreadsheet is created with two tabs:
-   - `Menu`
-   - `Menu + Toppings`
+The extension does **not** capture network traffic continuously.
 
-The captured menu is stored in `chrome.storage.local`, so closing the popup does not lose the latest result.
+1. Open a supported restaurant page.
+2. Open the extension popup.
+3. Click **Export**.
+4. The background service worker attaches `chrome.debugger` to the current tab and reloads it once.
+5. The first supported menu API response is parsed and normalized.
+6. Network capture is stopped immediately after the menu is found.
+7. The extension creates a Google Spreadsheet automatically.
+8. The generated spreadsheet opens in a new tab.
+
+If no supported menu response is detected within 30 seconds, capture is stopped automatically and the popup shows an error.
+
+The generated spreadsheet contains:
+
+- `Menu`
+- `Menu + Toppings`
 
 ## Development
 
@@ -38,11 +44,9 @@ The production extension is generated in `dist/`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
 5. Select the `dist` directory.
-6. Note the generated extension ID. You need it for Google OAuth setup below.
+6. Note the generated extension ID for Google OAuth setup.
 
 ## Google Sheets OAuth setup
-
-Export requires your own Google OAuth client because Chrome extensions cannot safely ship a shared client secret/client configuration for arbitrary local installations.
 
 1. Open Google Cloud Console and create/select a project.
 2. Enable **Google Sheets API**.
@@ -54,21 +58,20 @@ Export requires your own Google OAuth client because Chrome extensions cannot sa
 "client_id": "REPLACE_ME.apps.googleusercontent.com"
 ```
 
-with the generated OAuth client ID.
 6. Run `npm run build` again.
-7. Click **Reload** on the extension in `chrome://extensions`.
+7. Reload the extension from `chrome://extensions`.
 
-The extension requests only this Google scope:
+The extension requests this Google scope:
 
 ```text
 https://www.googleapis.com/auth/spreadsheets
 ```
 
-## Capture notes
+## Capture behavior
 
 ### DeliveryK
 
-Matches the shop-page API shape used by URLs similar to:
+Matches shop-page responses similar to:
 
 ```text
 https://api.deliveryk.com/api/shop-page/{restaurantId}/index
@@ -76,36 +79,31 @@ https://api.deliveryk.com/api/shop-page/{restaurantId}/index
 
 ### Grab
 
-Grab endpoints can change more often, so the parser intentionally does not depend on one hard-coded API path. For JSON responses on `*.grab.com`, it searches for a category array whose entries contain `items`, then normalizes the menu using Grab's `ID`, `priceInMinorUnit`, `modifierGroups`, and related fields.
-
-This makes the extension more tolerant of nested response-wrapper changes while still restricting capture to supported domains.
+Grab endpoints can change, so the parser does not depend on one hard-coded API path. For JSON responses on `*.grab.com`, it searches nested response data for category arrays containing menu items and normalizes Grab fields such as `ID`, `priceInMinorUnit`, `modifierGroups`, and `modifiers`.
 
 ## Price behavior
 
-Prices are exported exactly as numeric values provided by each API. For example, Grab's `priceInMinorUnit` is intentionally kept raw rather than converted, matching the behavior of the original Google Apps Script.
+Prices are exported exactly as numeric values supplied by the provider API. Grab's `priceInMinorUnit` is intentionally kept raw, matching the original Google Apps Script behavior.
 
 ## Permissions
 
-- `debugger`: read response bodies from the active tab through Chrome DevTools Protocol.
-- `activeTab`: operate on the tab where the user starts capture.
-- `storage`: persist the latest captured menu.
-- `identity`: authenticate the user for Google Sheets API.
+- `debugger`: read menu response bodies after the user clicks Export.
+- `activeTab`: operate on the current restaurant tab.
+- `storage`: persist export progress and the latest result.
+- `identity`: authenticate with Google Sheets API.
+- `alarms`: stop a capture automatically after 30 seconds if no menu is found.
 
-Chrome shows a strong warning for the `debugger` permission. This extension uses it only after the user presses Start Capture and detaches when capture is stopped.
+Chrome displays a strong warning for the `debugger` permission. The extension attaches only after the user clicks **Export** and detaches immediately after a menu is found, an error occurs, or the timeout expires.
 
 ## Project structure
 
 ```text
 src/
-  background.ts       Network capture service worker
+  background.ts       One-click capture + export workflow
   googleSheets.ts     Google OAuth + Sheets API export
   flatten.ts          Sheet row generation
   parsers/
     deliveryk.ts
     grab.ts
-  App.tsx             Extension popup
+  App.tsx             Popup with a single Export button
 ```
-
-## Current scope
-
-This first version creates a **new spreadsheet** for every export. Exporting into an existing spreadsheet can be added later without changing any parser because all providers already share one normalized menu model.
