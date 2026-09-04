@@ -1,11 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DELIVERYK_LOCALES, fetchDeliveryKLocaleMenus } from '../src/deliverykLocales'
+import {
+  DELIVERYK_LOCALES,
+  fetchDeliveryKLocaleMenus,
+  findLatestDeliveryKShopPageUrl,
+} from '../src/deliverykLocales'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('DeliveryK locale export', () => {
+  it('finds the latest previously loaded shop-page API', () => {
+    const latest = findLatestDeliveryKShopPageUrl([
+      'https://api.deliveryk.com/api/shop-page/10/index?width=1825',
+      'https://api.deliveryk.com/api/categories',
+      'https://api.deliveryk.com/api/shop-page/42/index?width=1825',
+    ])
+
+    expect(latest).toBe('https://api.deliveryk.com/api/shop-page/42/index?width=1825')
+  })
+
   it('fetches the same menu endpoint with every locale header', async () => {
     const headers: string[] = []
 
