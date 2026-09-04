@@ -33,6 +33,8 @@ export interface MenuCategory {
 export interface ParsedMenu {
   provider: Provider
   restaurantId?: string
+  storeName?: string
+  locale?: string
   sourceUrl: string
   capturedAt: string
   categories: MenuCategory[]
