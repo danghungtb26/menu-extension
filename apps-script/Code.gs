@@ -1,5 +1,6 @@
 const SECRET_PROPERTY = 'MENU_EXPORT_SECRET'
 const MAX_SHEET_NAME_LENGTH = 100
+const LEGACY_TOPPINGS_SUFFIX = '-toppings'
 
 function doPost(e) {
   try {
@@ -19,21 +20,15 @@ function doPost(e) {
       throw new Error('This Apps Script must be bound to the target Google Spreadsheet.')
     }
 
-    const baseName = buildBaseSheetName(payload)
-    const menuSheetName = makeSheetName(baseName, '')
-    const toppingsSheetName = makeSheetName(baseName, '-toppings')
-
-    writeRows(spreadsheet, menuSheetName, payload.menu)
-    writeRows(spreadsheet, toppingsSheetName, payload.toppings)
+    const sheetName = buildBaseSheetName(payload)
+    writeRows(spreadsheet, sheetName, payload.rows)
+    removeLegacyToppingsSheet(spreadsheet, sheetName)
 
     return jsonResponse({
       success: true,
       spreadsheetId: spreadsheet.getId(),
       spreadsheetUrl: spreadsheet.getUrl(),
-      sheets: {
-        menu: menuSheetName,
-        toppings: toppingsSheetName,
-      },
+      sheet: sheetName,
     })
   } catch (error) {
     return jsonResponse({
@@ -52,6 +47,15 @@ function buildBaseSheetName(payload) {
   ]
 
   return sanitizeSheetName(parts.join('-'), MAX_SHEET_NAME_LENGTH)
+}
+
+function removeLegacyToppingsSheet(spreadsheet, baseName) {
+  const legacyName = makeSheetName(baseName, LEGACY_TOPPINGS_SUFFIX)
+  const legacySheet = spreadsheet.getSheetByName(legacyName)
+
+  if (legacySheet) {
+    spreadsheet.deleteSheet(legacySheet)
+  }
 }
 
 function makeSheetName(baseName, suffix) {
