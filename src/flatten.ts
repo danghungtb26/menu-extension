@@ -21,6 +21,14 @@ export const getCaptureSummary = (menu: ParsedMenu): CaptureSummary => {
   }
 }
 
+const imagePreviewFormula = (imageUrl?: string): string => {
+  const url = imageUrl?.trim()
+  if (!url) return ''
+
+  const escapedUrl = url.replace(/"/g, '""')
+  return `=IFERROR(IMAGE("${escapedUrl}",1),"")`
+}
+
 export const flattenMenuSheet = (menu: ParsedMenu): (string | number)[][] => {
   const rows: (string | number)[][] = [[
     'category_id',
@@ -31,11 +39,12 @@ export const flattenMenuSheet = (menu: ParsedMenu): (string | number)[][] => {
     'product_price',
     'product_desc',
     'product_thumb',
+    'product_thumb_preview',
   ]]
 
   for (const category of menu.categories) {
     if (category.items.length === 0) {
-      rows.push([category.id, category.name, category.description, '', '', '', '', ''])
+      rows.push([category.id, category.name, category.description, '', '', '', '', '', ''])
       continue
     }
 
@@ -49,6 +58,7 @@ export const flattenMenuSheet = (menu: ParsedMenu): (string | number)[][] => {
         item.price,
         item.description,
         item.imageUrl,
+        imagePreviewFormula(item.imageUrl),
       ])
     }
   }
@@ -66,6 +76,7 @@ export const flattenToppingsSheet = (menu: ParsedMenu): (string | number)[][] =>
     'product_price',
     'product_desc',
     'product_thumb',
+    'product_thumb_preview',
     'topping_type_id',
     'topping_type_name',
     'topping_type_type',
@@ -78,7 +89,7 @@ export const flattenToppingsSheet = (menu: ParsedMenu): (string | number)[][] =>
     let firstCategory = true
 
     if (category.items.length === 0) {
-      rows.push([category.id, category.name, category.description, '', '', '', '', '', '', '', '', '', '', ''])
+      rows.push([category.id, category.name, category.description, '', '', '', '', '', '', '', '', '', '', '', ''])
       continue
     }
 
@@ -95,6 +106,7 @@ export const flattenToppingsSheet = (menu: ParsedMenu): (string | number)[][] =>
           item.price,
           item.description,
           item.imageUrl,
+          imagePreviewFormula(item.imageUrl),
           '', '', '', '', '', '',
         ])
         firstCategory = false
@@ -114,6 +126,7 @@ export const flattenToppingsSheet = (menu: ParsedMenu): (string | number)[][] =>
             firstItem ? item.price : '',
             firstItem ? item.description : '',
             firstItem ? item.imageUrl : '',
+            firstItem ? imagePreviewFormula(item.imageUrl) : '',
             group.id,
             group.name,
             group.type,
@@ -134,6 +147,7 @@ export const flattenToppingsSheet = (menu: ParsedMenu): (string | number)[][] =>
             firstItem ? item.price : '',
             firstItem ? item.description : '',
             firstItem ? item.imageUrl : '',
+            firstItem ? imagePreviewFormula(item.imageUrl) : '',
             firstGroup ? group.id : '',
             firstGroup ? group.name : '',
             firstGroup ? group.type : '',
