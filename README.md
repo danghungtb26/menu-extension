@@ -88,6 +88,7 @@ product_name
 product_price
 product_desc
 product_thumb
+product_thumb_preview
 topping_type_id
 topping_type_name
 topping_type_type
@@ -95,6 +96,8 @@ topping_id
 topping_name
 topping_price
 ```
+
+`product_thumb` keeps the original image URL. `product_thumb_preview` uses a Google Sheets `IMAGE(..., 1)` formula, so the image is rendered inside the cell while keeping its aspect ratio. If the image URL is empty or cannot be loaded, the preview cell stays blank.
 
 If a product has no toppings, columns from `topping_type_id` through `topping_price` are blank.
 
@@ -192,7 +195,7 @@ Prices are exported exactly as numeric values supplied by the provider API. Grab
 - `debugger`: read menu response bodies and page metadata after the user clicks Export.
 - `activeTab`: operate on the current restaurant tab.
 - `storage`: persist Apps Script configuration and export progress.
-- `alarms`: stop a capture automatically after 30 seconds if no menu is found.
+- `alarms`: stop a capture automatically after 3 minutes if no menu is found.
 
 Chrome displays a strong warning for the `debugger` permission. The extension attaches only after the user clicks **Export** and detaches as soon as the required data is available or an error occurs.
 
