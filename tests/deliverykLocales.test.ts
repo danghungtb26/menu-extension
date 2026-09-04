@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DELIVERYK_LOCALES,
+  buildDeliveryKShopPageApiUrl,
   fetchDeliveryKLocaleMenus,
   findLatestDeliveryKShopPageUrl,
+  getDeliveryKRestaurantIdFromPageUrl,
 } from '../src/deliverykLocales'
 
 afterEach(() => {
@@ -10,6 +12,21 @@ afterEach(() => {
 })
 
 describe('DeliveryK locale export', () => {
+  it('extracts restaurant id from a direct shop page', () => {
+    expect(getDeliveryKRestaurantIdFromPageUrl('https://www.deliveryk.com/shops/14512')).toBe('14512')
+    expect(buildDeliveryKShopPageApiUrl('14512')).toBe(
+      'https://api.deliveryk.com/api/shop-page/14512/index?width=1825',
+    )
+  })
+
+  it('does not treat category pages as direct shop pages', () => {
+    expect(
+      getDeliveryKRestaurantIdFromPageUrl(
+        'https://www.deliveryk.com/category-shops?shopCategoryId=21',
+      ),
+    ).toBeUndefined()
+  })
+
   it('finds the latest previously loaded shop-page API', () => {
     const latest = findLatestDeliveryKShopPageUrl([
       'https://api.deliveryk.com/api/shop-page/10/index?width=1825',
