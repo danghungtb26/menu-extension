@@ -13,7 +13,7 @@ const APPS_SCRIPT_CONFIG_KEY = 'appsScriptConfig'
 const EXPORT_CONTEXT_KEY = 'exportPageContext'
 const DEBUGGER_VERSION = '1.3'
 const EXPORT_TIMEOUT_ALARM = 'menu-export-timeout'
-const EXPORT_TIMEOUT_MINUTES = 0.5
+const EXPORT_TIMEOUT_MINUTES = 3
 
 interface ExportPageContext {
   storeName: string
@@ -463,7 +463,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
       capturing: false,
       exporting: false,
       phase: 'error',
-      error: 'No supported menu API response was detected within 30 seconds.',
+      error: 'No supported menu API response was detected within 3 minutes.',
     }
     await setState(timeoutState)
     await detach(state.tabId)
