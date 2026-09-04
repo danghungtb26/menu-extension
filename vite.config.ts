@@ -1,6 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   plugins: [react()],
@@ -8,8 +11,8 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, 'index.html'),
-        background: resolve(__dirname, 'src/background.ts'),
+        popup: resolve(rootDir, 'index.html'),
+        background: resolve(rootDir, 'src/background.ts'),
       },
       output: {
         entryFileNames: '[name].js',
