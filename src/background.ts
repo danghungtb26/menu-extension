@@ -260,6 +260,25 @@ const exportLoadedDeliveryKShop = async (
   }
 }
 
+const beginCapture = async (tabId: number, reload: boolean): Promise<CaptureState> => {
+  const next: CaptureState = {
+    capturing: true,
+    exporting: true,
+    phase: 'capturing',
+    tabId,
+  }
+  await setState(next)
+
+  await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
+  await chrome.alarms.create(EXPORT_TIMEOUT_ALARM, { delayInMinutes: EXPORT_TIMEOUT_MINUTES })
+
+  if (reload) {
+    await chrome.tabs.reload(tabId)
+  }
+
+  return next
+}
+
 const startExport = async (tabId: number, config: AppsScriptConfig): Promise<CaptureState> => {
   const previous = await getState()
   if (previous.exporting) return previous
@@ -299,35 +318,14 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
       }
 
       if (isDeliveryKCategoryPage(context.pageUrl)) {
-        const next: CaptureState = {
-          capturing: false,
-          exporting: false,
-          phase: 'error',
-          lastCapture: previous.lastCapture,
-          lastSheetUrl: previous.lastSheetUrl,
-          lastExportedLocales: previous.lastExportedLocales,
-          error: 'Open a DeliveryK restaurant from this list first, then click Export. No loaded shop-page API was found.',
-        }
-        await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
-        await setState(next)
-        await detach(tabId)
-        return next
+        // category-shops is a valid DeliveryK page, but it only identifies the
+        // category. Keep the debugger attached and wait for the user to open a
+        // restaurant; that action triggers /api/shop-page/{restaurantId}/index.
+        return await beginCapture(tabId, false)
       }
     }
 
-    const next: CaptureState = {
-      capturing: true,
-      exporting: true,
-      phase: 'capturing',
-      tabId,
-    }
-    await setState(next)
-
-    await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
-    await chrome.alarms.create(EXPORT_TIMEOUT_ALARM, { delayInMinutes: EXPORT_TIMEOUT_MINUTES })
-    await chrome.tabs.reload(tabId)
-
-    return next
+    return await beginCapture(tabId, true)
   } catch (error) {
     await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
     const next: CaptureState = {
@@ -449,12 +447,15 @@ chrome.alarms.onAlarm.addListener(alarm => {
     const state = await getState()
     if (!state.exporting || !state.capturing || state.phase !== 'capturing') return
 
+    const context = await getExportPageContext()
     await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
     const timeoutState: CaptureState = {
       capturing: false,
       exporting: false,
       phase: 'error',
-      error: 'No supported menu API response was detected within 30 seconds.',
+      error: isDeliveryKCategoryPage(context.pageUrl)
+        ? 'No restaurant was opened within 30 seconds. Click Export, then open a DeliveryK restaurant from the list.'
+        : 'No supported menu API response was detected within 30 seconds.',
     }
     await setState(timeoutState)
     await detach(state.tabId)
