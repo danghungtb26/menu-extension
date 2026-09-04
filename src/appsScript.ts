@@ -49,7 +49,6 @@ export const exportMenuViaAppsScript = async (
 ): Promise<{ spreadsheetUrl: string }> => {
   validateAppsScriptConfig(config)
   const identity = getExportIdentity(menu)
-  const rows = flattenToppingsSheet(menu)
 
   const response = await fetch(normalizeEndpoint(config.endpoint), {
     method: 'POST',
@@ -60,11 +59,7 @@ export const exportMenuViaAppsScript = async (
       secret: config.secret,
       ...identity,
       sourceUrl: menu.sourceUrl,
-      // Keep the deployed Apps Script contract unchanged. The extension now
-      // always sends the full topping-aware schema as the main menu payload.
-      // Products without toppings still produce one row with empty topping columns.
-      menu: rows,
-      toppings: [],
+      rows: flattenToppingsSheet(menu),
     }),
   })
 
