@@ -1,5 +1,10 @@
 import { exportMenuViaAppsScript, validateAppsScriptConfig } from './appsScript'
-import { fetchDeliveryKLocaleMenus, findLatestDeliveryKShopPageUrl } from './deliverykLocales'
+import {
+  buildDeliveryKShopPageApiUrl,
+  fetchDeliveryKLocaleMenus,
+  findLatestDeliveryKShopPageUrl,
+  getDeliveryKRestaurantIdFromPageUrl,
+} from './deliverykLocales'
 import { isSupportedDomain, parseMenuResponse } from './parsers'
 import type { AppsScriptConfig, CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
 
@@ -129,15 +134,6 @@ const isDeliveryKPage = (value: string): boolean => {
   }
 }
 
-const isDeliveryKCategoryPage = (value: string): boolean => {
-  try {
-    const url = new URL(value)
-    return /(^|\.)deliveryk\.com$/i.test(url.hostname) && url.pathname.includes('/category-shops')
-  } catch {
-    return false
-  }
-}
-
 const readPageContext = async (tabId: number): Promise<ExportPageContext> => {
   try {
     const result = await chrome.debugger.sendCommand(
@@ -146,7 +142,10 @@ const readPageContext = async (tabId: number): Promise<ExportPageContext> => {
       {
         expression: `(() => {
           const text = value => typeof value === 'string' ? value.trim() : '';
-          const h1 = text(document.querySelector('h1')?.textContent);
+          const headings = [...document.querySelectorAll('h1')]
+            .map(node => text(node.textContent))
+            .filter(Boolean);
+          const h1 = headings[headings.length - 1] || '';
           const ogTitle = text(document.querySelector('meta[property="og:title"]')?.getAttribute('content'));
           return {
             storeName: h1 || ogTitle || text(document.title),
@@ -260,7 +259,7 @@ const exportLoadedDeliveryKShop = async (
   }
 }
 
-const beginCapture = async (tabId: number, reload: boolean): Promise<CaptureState> => {
+const beginCapture = async (tabId: number): Promise<CaptureState> => {
   const next: CaptureState = {
     capturing: true,
     exporting: true,
@@ -271,10 +270,7 @@ const beginCapture = async (tabId: number, reload: boolean): Promise<CaptureStat
 
   await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
   await chrome.alarms.create(EXPORT_TIMEOUT_ALARM, { delayInMinutes: EXPORT_TIMEOUT_MINUTES })
-
-  if (reload) {
-    await chrome.tabs.reload(tabId)
-  }
+  await chrome.tabs.reload(tabId)
 
   return next
 }
@@ -310,22 +306,37 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
     await chrome.storage.local.set({ [EXPORT_CONTEXT_KEY]: context })
 
     if (isDeliveryKPage(context.pageUrl)) {
+      const directRestaurantId = getDeliveryKRestaurantIdFromPageUrl(context.pageUrl)
+      if (directRestaurantId) {
+        return await exportLoadedDeliveryKShop(
+          tabId,
+          buildDeliveryKShopPageApiUrl(directRestaurantId),
+          context,
+        )
+      }
+
       const resourceUrls = await readLoadedResourceUrls(tabId)
       const loadedShopUrl = findLatestDeliveryKShopPageUrl(resourceUrls)
-
       if (loadedShopUrl) {
         return await exportLoadedDeliveryKShop(tabId, loadedShopUrl, context)
       }
 
-      if (isDeliveryKCategoryPage(context.pageUrl)) {
-        // category-shops is a valid DeliveryK page, but it only identifies the
-        // category. Keep the debugger attached and wait for the user to open a
-        // restaurant; that action triggers /api/shop-page/{restaurantId}/index.
-        return await beginCapture(tabId, false)
+      const next: CaptureState = {
+        capturing: false,
+        exporting: false,
+        phase: 'error',
+        lastCapture: previous.lastCapture,
+        lastSheetUrl: previous.lastSheetUrl,
+        lastExportedLocales: previous.lastExportedLocales,
+        error: 'Open a DeliveryK shop page such as https://www.deliveryk.com/shops/14512 before exporting.',
       }
+      await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+      await setState(next)
+      await detach(tabId)
+      return next
     }
 
-    return await beginCapture(tabId, true)
+    return await beginCapture(tabId)
   } catch (error) {
     await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
     const next: CaptureState = {
@@ -447,15 +458,12 @@ chrome.alarms.onAlarm.addListener(alarm => {
     const state = await getState()
     if (!state.exporting || !state.capturing || state.phase !== 'capturing') return
 
-    const context = await getExportPageContext()
     await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
     const timeoutState: CaptureState = {
       capturing: false,
       exporting: false,
       phase: 'error',
-      error: isDeliveryKCategoryPage(context.pageUrl)
-        ? 'No restaurant was opened within 30 seconds. Click Export, then open a DeliveryK restaurant from the list.'
-        : 'No supported menu API response was detected within 30 seconds.',
+      error: 'No supported menu API response was detected within 30 seconds.',
     }
     await setState(timeoutState)
     await detach(state.tabId)
