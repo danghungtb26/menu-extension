@@ -25,33 +25,76 @@ describe('menu parsers', () => {
     expect(parsed?.categories[0].items[0].modifierGroups[0].modifiers[0].name).toBe('Large')
   })
 
-  it('finds Grab categories inside a nested response', () => {
-    const parsed = parseGrab('https://portal.grab.com/foodweb/guest/v2/merchants/5-C24WJZLFEJ6HBE', {
-      data: {
-        merchant: {
-          menu: {
-            categories: [{
-              ID: 'c1',
-              name: 'Drinks',
-              items: [{
-                ID: 'i1',
-                name: 'Coffee',
-                priceInMinorUnit: 45000,
-                modifierGroups: [{
-                  ID: 'g1',
-                  name: 'Ice',
-                  selectionType: 'SINGLE',
-                  modifiers: [{ ID: 'm1', name: 'Less ice', priceInMinorUnit: 0 }],
-                }],
-              }],
-            }],
-          },
-        },
-      },
+  it('parses the real Grab category/item/modifier shape', () => {
+    const parsed = parseGrab('https://portal.grab.com/foodweb/guest/v2/menu', [{
+      name: 'Dành cho bạn',
+      available: true,
+      items: [{
+        ID: 'VNITE20260411153412026620',
+        name: 'Pancakes (3 Stacks)',
+        available: true,
+        priceInMinorUnit: 159500,
+        imgHref: 'https://image.test/photo.webp',
+        description: 'Comes only with butter and maple syrup on the side',
+        merchantID: '5-C7LCTB4GR7A1EN',
+        modifierGroups: [{
+          ID: 'VNMOD20250804064122275387',
+          name: 'add-a-side',
+          selectionType: 1,
+          modifiers: [{
+            ID: 'VNMOD20260514141204071372',
+            name: 'Extra Beef Pattie',
+            priceInMinorUnit: 88000,
+            priceV2: { amountInMinor: 88000, amountDisplay: '88.000' },
+          }],
+        }],
+        thumbImages: ['https://image.test/thumb.webp'],
+        images: ['https://image.test/detail.webp'],
+        imgHrefFallback: 'https://image.test/fallback.jpg',
+      }],
+    }])
+
+    expect(parsed?.restaurantId).toBe('5-C7LCTB4GR7A1EN')
+    expect(parsed?.categories[0].name).toBe('Dành cho bạn')
+    expect(parsed?.categories[0].items[0]).toMatchObject({
+      id: 'VNITE20260411153412026620',
+      name: 'Pancakes (3 Stacks)',
+      price: 159500,
+      description: 'Comes only with butter and maple syrup on the side',
+      imageUrl: 'https://image.test/photo.webp',
     })
+    expect(parsed?.categories[0].items[0].modifierGroups[0]).toMatchObject({
+      id: 'VNMOD20250804064122275387',
+      name: 'add-a-side',
+      type: '1',
+    })
+    expect(parsed?.categories[0].items[0].modifierGroups[0].modifiers[0]).toEqual({
+      id: 'VNMOD20260514141204071372',
+      name: 'Extra Beef Pattie',
+      price: 88000,
+    })
+  })
+
+  it('falls back to Grab priceV2 and image variants when primary fields are missing', () => {
+    const parsed = parseGrab('https://portal.grab.com/foodweb/guest/v2/merchants/5-C24WJZLFEJ6HBE', [{
+      name: 'Drinks',
+      items: [{
+        ID: 'i1',
+        name: 'Coffee',
+        priceV2: { amountInMinor: 45000 },
+        thumbImages: ['https://image.test/thumb.jpg'],
+        modifierGroups: [{
+          ID: 'g1',
+          name: 'Ice',
+          modifiers: [{ ID: 'm1', name: 'Less ice', priceV2: { amountInMinor: 5000 } }],
+        }],
+      }],
+    }])
 
     expect(parsed?.restaurantId).toBe('5-C24WJZLFEJ6HBE')
-    expect(parsed?.categories[0].items[0].name).toBe('Coffee')
+    expect(parsed?.categories[0].items[0].price).toBe(45000)
+    expect(parsed?.categories[0].items[0].imageUrl).toBe('https://image.test/thumb.jpg')
+    expect(parsed?.categories[0].items[0].modifierGroups[0].modifiers[0].price).toBe(5000)
     expect(getCaptureSummary(parsed!).toppings).toBe(1)
   })
 
