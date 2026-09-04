@@ -18,10 +18,14 @@ const getState = async (): Promise<CaptureState> => {
   return (result[STORAGE_KEY] as CaptureState | undefined) ?? emptyState()
 }
 
+const compactState = (state: CaptureState): CaptureState =>
+  Object.fromEntries(Object.entries(state).filter(([, value]) => value !== undefined)) as unknown as CaptureState
+
 const setState = async (state: CaptureState) => {
-  await chrome.storage.local.set({ [STORAGE_KEY]: state })
+  const persistedState = compactState(state)
+  await chrome.storage.local.set({ [STORAGE_KEY]: persistedState })
   try {
-    await chrome.runtime.sendMessage({ type: 'CAPTURE_UPDATED', state })
+    await chrome.runtime.sendMessage({ type: 'CAPTURE_UPDATED', state: persistedState })
   } catch {
     // The popup may be closed. Persisted state is the source of truth.
   }
@@ -73,7 +77,7 @@ const startExport = async (tabId: number): Promise<CaptureState> => {
       error: 'Google OAuth is not configured. Set oauth2.client_id in public/manifest.json, rebuild, then reload the extension.',
     }
     await setState(next)
-    return next
+    return compactState(next)
   }
 
   if (previous.capturing) await detach(previous.tabId)
