@@ -1,7 +1,7 @@
 import { parseDeliveryK } from './parsers/deliveryk'
 import type { ParsedMenu } from './types'
 
-export const DELIVERYK_LOCALES = ['vi', 'en', 'ko', 'ja', 'zh', 'th'] as const
+export const DELIVERYK_LOCALES = ['vi', 'en', 'ko', 'ja'] as const
 
 export type DeliveryKLocale = (typeof DELIVERYK_LOCALES)[number]
 
