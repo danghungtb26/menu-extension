@@ -1,8 +1,9 @@
-import { exportMenuToNewSpreadsheet } from './googleSheets'
+import { exportMenuViaAppsScript, validateAppsScriptConfig } from './appsScript'
 import { isSupportedDomain, parseMenuResponse } from './parsers'
-import type { CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
+import type { AppsScriptConfig, CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
 
 const STORAGE_KEY = 'captureState'
+const APPS_SCRIPT_CONFIG_KEY = 'appsScriptConfig'
 const DEBUGGER_VERSION = '1.3'
 const EXPORT_TIMEOUT_ALARM = 'menu-export-timeout'
 const EXPORT_TIMEOUT_MINUTES = 0.5
@@ -16,6 +17,14 @@ const emptyState = (): CaptureState => ({
 const getState = async (): Promise<CaptureState> => {
   const result = await chrome.storage.local.get(STORAGE_KEY)
   return (result[STORAGE_KEY] as CaptureState | undefined) ?? emptyState()
+}
+
+const getAppsScriptConfig = async (): Promise<AppsScriptConfig> => {
+  const result = await chrome.storage.local.get(APPS_SCRIPT_CONFIG_KEY)
+  const config = result[APPS_SCRIPT_CONFIG_KEY] as AppsScriptConfig | undefined
+  if (!config) throw new Error('Apps Script Web App is not configured.')
+  validateAppsScriptConfig(config)
+  return config
 }
 
 const compactState = (state: CaptureState): CaptureState =>
@@ -62,19 +71,21 @@ const failExport = async (state: CaptureState, error: unknown) => {
   await detach(state.tabId)
 }
 
-const startExport = async (tabId: number): Promise<CaptureState> => {
+const startExport = async (tabId: number, config: AppsScriptConfig): Promise<CaptureState> => {
   const previous = await getState()
   if (previous.exporting) return previous
 
-  const clientId = chrome.runtime.getManifest().oauth2?.client_id ?? ''
-  if (!clientId || clientId.startsWith('REPLACE_ME')) {
+  try {
+    validateAppsScriptConfig(config)
+    await chrome.storage.local.set({ [APPS_SCRIPT_CONFIG_KEY]: config })
+  } catch (error) {
     const next: CaptureState = {
       capturing: false,
       exporting: false,
       phase: 'error',
       lastCapture: previous.lastCapture,
       lastSheetUrl: previous.lastSheetUrl,
-      error: 'Google OAuth is not configured. Set oauth2.client_id in public/manifest.json, rebuild, then reload the extension.',
+      error: formatError(error),
     }
     await setState(next)
     return compactState(next)
@@ -157,7 +168,8 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
     await detach(source.tabId)
 
     try {
-      const resultSheet = await exportMenuToNewSpreadsheet(parsed, getSpreadsheetTitle(parsed))
+      const config = await getAppsScriptConfig()
+      const resultSheet = await exportMenuViaAppsScript(parsed, getSpreadsheetTitle(parsed), config)
       const doneState: CaptureState = {
         capturing: false,
         exporting: false,
@@ -228,7 +240,7 @@ chrome.runtime.onMessage.addListener((request: RuntimeRequest, _sender, sendResp
       }
 
       if (request.type === 'EXPORT_CURRENT_TAB') {
-        sendResponse({ ok: true, state: await startExport(request.tabId) } satisfies RuntimeResponse)
+        sendResponse({ ok: true, state: await startExport(request.tabId, request.config) } satisfies RuntimeResponse)
         return
       }
 
