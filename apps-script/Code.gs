@@ -1,4 +1,5 @@
 const SECRET_PROPERTY = 'MENU_EXPORT_SECRET'
+const MAX_SHEET_NAME_LENGTH = 100
 
 function doPost(e) {
   try {
@@ -13,21 +14,26 @@ function doPost(e) {
       return jsonResponse({ success: false, error: 'Unauthorized' })
     }
 
-    const title = String(payload.title || 'Restaurant Menu').trim() || 'Restaurant Menu'
-    const spreadsheet = SpreadsheetApp.create(title)
-
-    writeRows(spreadsheet, 'Menu', payload.menu)
-    writeRows(spreadsheet, 'Menu + Toppings', payload.toppings)
-
-    const defaultSheet = spreadsheet.getSheets()[0]
-    if (defaultSheet && !['Menu', 'Menu + Toppings'].includes(defaultSheet.getName())) {
-      spreadsheet.deleteSheet(defaultSheet)
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet()
+    if (!spreadsheet) {
+      throw new Error('This Apps Script must be bound to the target Google Spreadsheet.')
     }
+
+    const baseName = buildBaseSheetName(payload)
+    const menuSheetName = makeSheetName(baseName, '')
+    const toppingsSheetName = makeSheetName(baseName, '-toppings')
+
+    writeRows(spreadsheet, menuSheetName, payload.menu)
+    writeRows(spreadsheet, toppingsSheetName, payload.toppings)
 
     return jsonResponse({
       success: true,
       spreadsheetId: spreadsheet.getId(),
       spreadsheetUrl: spreadsheet.getUrl(),
+      sheets: {
+        menu: menuSheetName,
+        toppings: toppingsSheetName,
+      },
     })
   } catch (error) {
     return jsonResponse({
@@ -35,6 +41,39 @@ function doPost(e) {
       error: error && error.message ? error.message : String(error),
     })
   }
+}
+
+function buildBaseSheetName(payload) {
+  const parts = [
+    payload.site || 'Web',
+    payload.storeName || 'restaurant',
+    payload.locale || 'default',
+    payload.restaurantId || 'unknown',
+  ]
+
+  return sanitizeSheetName(parts.join('-'), MAX_SHEET_NAME_LENGTH)
+}
+
+function makeSheetName(baseName, suffix) {
+  const safeSuffix = String(suffix || '')
+  const baseLimit = Math.max(1, MAX_SHEET_NAME_LENGTH - safeSuffix.length)
+  const safeBase = sanitizeSheetName(baseName, baseLimit)
+  return `${safeBase}${safeSuffix}`
+}
+
+function sanitizeSheetName(value, maxLength) {
+  const limit = Math.max(1, Number(maxLength) || MAX_SHEET_NAME_LENGTH)
+  let name = String(value || '')
+    .replace(/[\\/?*\[\]:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*/g, '-')
+    .trim()
+
+  if (!name) {
+    name = 'Menu'
+  }
+
+  return name.slice(0, limit).replace(/[-\s]+$/g, '') || 'Menu'
 }
 
 function writeRows(spreadsheet, sheetName, rows) {
