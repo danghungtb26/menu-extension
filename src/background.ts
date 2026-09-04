@@ -21,6 +21,27 @@ interface ExportPageContext {
   pageUrl: string
 }
 
+interface PendingResponse {
+  tabId: number
+  requestId: string
+  responseUrl: string
+}
+
+const pendingResponses = new Map<string, PendingResponse>()
+
+const pendingKey = (tabId: number, requestId: string): string => `${tabId}:${requestId}`
+
+const clearPendingResponses = (tabId?: number) => {
+  if (tabId === undefined) {
+    pendingResponses.clear()
+    return
+  }
+
+  for (const [key, value] of pendingResponses) {
+    if (value.tabId === tabId) pendingResponses.delete(key)
+  }
+}
+
 const emptyState = (): CaptureState => ({
   capturing: false,
   exporting: false,
@@ -64,6 +85,7 @@ const setState = async (state: CaptureState) => {
 
 const detach = async (tabId?: number) => {
   if (tabId === undefined) return
+  clearPendingResponses(tabId)
   try {
     await chrome.debugger.detach({ tabId })
   } catch {
@@ -185,6 +207,7 @@ const readLoadedResourceUrls = async (tabId: number): Promise<string[]> => {
 const failExport = async (state: CaptureState, error: unknown) => {
   await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
   await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+  clearPendingResponses(state.tabId)
   const next: CaptureState = {
     capturing: false,
     exporting: false,
@@ -260,6 +283,8 @@ const exportLoadedDeliveryKShop = async (
 }
 
 const beginCapture = async (tabId: number): Promise<CaptureState> => {
+  clearPendingResponses(tabId)
+
   const next: CaptureState = {
     capturing: true,
     exporting: true,
@@ -339,6 +364,7 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
     return await beginCapture(tabId)
   } catch (error) {
     await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+    clearPendingResponses(tabId)
     const next: CaptureState = {
       capturing: false,
       exporting: false,
@@ -358,36 +384,31 @@ const decodeBody = (body: string, base64Encoded?: boolean): string => {
   return new TextDecoder().decode(bytes)
 }
 
-const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => {
-  if (source.tabId === undefined) return
+const processCompletedResponse = async (
+  source: chrome.debugger.Debuggee,
+  pending: PendingResponse,
+) => {
+  if (source.tabId === undefined || source.tabId !== pending.tabId) return
 
   const state = await getState()
   if (!state.capturing || !state.exporting || state.tabId !== source.tabId) return
-
-  const responseUrl = params?.response?.url as string | undefined
-  if (!responseUrl || !isSupportedDomain(responseUrl)) return
-
-  const mimeType = String(params?.response?.mimeType ?? '').toLowerCase()
-  const resourceType = String(params?.type ?? '').toLowerCase()
-  const mightBeJson = mimeType.includes('json') || resourceType === 'xhr' || resourceType === 'fetch'
-  if (!mightBeJson) return
 
   try {
     const result = await chrome.debugger.sendCommand(
       { tabId: source.tabId },
       'Network.getResponseBody',
-      { requestId: params.requestId },
+      { requestId: pending.requestId },
     ) as { body?: string; base64Encoded?: boolean }
 
     if (!result?.body) return
 
     const payload = JSON.parse(decodeBody(result.body, result.base64Encoded))
-    const parsed = parseMenuResponse(responseUrl, payload)
+    const parsed = parseMenuResponse(pending.responseUrl, payload)
     if (!parsed || parsed.categories.length === 0) return
 
     const context = await getExportPageContext()
     const storeName = cleanStoreName(context.storeName)
-    const currentLocale = resolveLocale(context, responseUrl)
+    const currentLocale = resolveLocale(context, pending.responseUrl)
     const detected = {
       ...parsed,
       storeName,
@@ -395,6 +416,7 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
     }
 
     await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
+    clearPendingResponses(source.tabId)
     await setState({
       capturing: false,
       exporting: true,
@@ -406,7 +428,7 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
 
     try {
       if (parsed.provider === 'deliveryk') {
-        const menus = await fetchDeliveryKLocaleMenus(responseUrl, storeName)
+        const menus = await fetchDeliveryKLocaleMenus(pending.responseUrl, storeName)
         const preferredLanguage = normalizeLocale(currentLocale).split('-')[0]
         const preferredMenu = menus.find(menu => menu.locale === preferredLanguage) ?? menus[0]
         await exportMenus(menus, preferredMenu, source.tabId)
@@ -424,15 +446,61 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
       }, error)
     }
   } catch {
-    // Most responses are unrelated to menus or may have expired bodies.
+    // The request may not be JSON or its body may no longer be available.
   }
 }
 
+const rememberResponse = async (source: chrome.debugger.Debuggee, params: any) => {
+  if (source.tabId === undefined) return
+
+  const state = await getState()
+  if (!state.capturing || !state.exporting || state.tabId !== source.tabId) return
+
+  const requestId = String(params?.requestId ?? '')
+  const responseUrl = params?.response?.url as string | undefined
+  if (!requestId || !responseUrl || !isSupportedDomain(responseUrl)) return
+
+  const mimeType = String(params?.response?.mimeType ?? '').toLowerCase()
+  const resourceType = String(params?.type ?? '').toLowerCase()
+  const mightBeJson = mimeType.includes('json') || resourceType === 'xhr' || resourceType === 'fetch'
+  if (!mightBeJson) return
+
+  pendingResponses.set(pendingKey(source.tabId, requestId), {
+    tabId: source.tabId,
+    requestId,
+    responseUrl,
+  })
+}
+
+const handleLoadingFinished = async (source: chrome.debugger.Debuggee, params: any) => {
+  if (source.tabId === undefined) return
+
+  const requestId = String(params?.requestId ?? '')
+  if (!requestId) return
+
+  const key = pendingKey(source.tabId, requestId)
+  const pending = pendingResponses.get(key)
+  if (!pending) return
+
+  pendingResponses.delete(key)
+  await processCompletedResponse(source, pending)
+}
+
+const forgetFailedResponse = (source: chrome.debugger.Debuggee, params: any) => {
+  if (source.tabId === undefined) return
+  const requestId = String(params?.requestId ?? '')
+  if (requestId) pendingResponses.delete(pendingKey(source.tabId, requestId))
+}
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (method === 'Network.responseReceived') void handleResponse(source, params)
+  if (method === 'Network.responseReceived') void rememberResponse(source, params)
+  if (method === 'Network.loadingFinished') void handleLoadingFinished(source, params)
+  if (method === 'Network.loadingFailed') forgetFailedResponse(source, params)
 })
 
 chrome.debugger.onDetach.addListener(source => {
+  clearPendingResponses(source.tabId)
+
   void (async () => {
     const state = await getState()
     if (source.tabId === state.tabId && state.capturing) {
@@ -459,6 +527,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
     if (!state.exporting || !state.capturing || state.phase !== 'capturing') return
 
     await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+    clearPendingResponses(state.tabId)
     const timeoutState: CaptureState = {
       capturing: false,
       exporting: false,
