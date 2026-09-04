@@ -1,12 +1,19 @@
 import { exportMenuViaAppsScript, validateAppsScriptConfig } from './appsScript'
 import { isSupportedDomain, parseMenuResponse } from './parsers'
-import type { AppsScriptConfig, CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
+import type { AppsScriptConfig, CaptureState, RuntimeRequest, RuntimeResponse } from './types'
 
 const STORAGE_KEY = 'captureState'
 const APPS_SCRIPT_CONFIG_KEY = 'appsScriptConfig'
+const EXPORT_CONTEXT_KEY = 'exportPageContext'
 const DEBUGGER_VERSION = '1.3'
 const EXPORT_TIMEOUT_ALARM = 'menu-export-timeout'
 const EXPORT_TIMEOUT_MINUTES = 0.5
+
+interface ExportPageContext {
+  storeName: string
+  locale: string
+  pageUrl: string
+}
 
 const emptyState = (): CaptureState => ({
   capturing: false,
@@ -25,6 +32,15 @@ const getAppsScriptConfig = async (): Promise<AppsScriptConfig> => {
   if (!config) throw new Error('Apps Script Web App is not configured.')
   validateAppsScriptConfig(config)
   return config
+}
+
+const getExportPageContext = async (): Promise<ExportPageContext> => {
+  const result = await chrome.storage.local.get(EXPORT_CONTEXT_KEY)
+  return (result[EXPORT_CONTEXT_KEY] as ExportPageContext | undefined) ?? {
+    storeName: '',
+    locale: '',
+    pageUrl: '',
+  }
 }
 
 const compactState = (state: CaptureState): CaptureState =>
@@ -51,14 +67,88 @@ const detach = async (tabId?: number) => {
 
 const formatError = (error: unknown) => error instanceof Error ? error.message : String(error)
 
-const getSpreadsheetTitle = (menu: ParsedMenu) => {
-  const provider = menu.provider === 'grab' ? 'Grab' : 'DeliveryK'
-  const restaurant = menu.restaurantId ? ` ${menu.restaurantId}` : ''
-  return `${provider}${restaurant} Menu`
+const normalizeLocale = (value: string): string => {
+  const normalized = value.trim().replace(/_/g, '-')
+  if (!normalized) return ''
+
+  const [language, region, ...rest] = normalized.split('-').filter(Boolean)
+  if (!language) return ''
+
+  return [
+    language.toLowerCase(),
+    region?.length === 2 ? region.toUpperCase() : region,
+    ...rest,
+  ].filter(Boolean).join('-')
+}
+
+const localeFromUrl = (value: string): string => {
+  if (!value) return ''
+
+  try {
+    const url = new URL(value)
+    for (const key of ['locale', 'lang', 'language', 'languageCode', 'localeCode']) {
+      const locale = url.searchParams.get(key)
+      if (locale) return normalizeLocale(locale)
+    }
+
+    const segment = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .find(part => /^[a-z]{2}(?:[-_][a-z]{2})?$/i.test(part))
+
+    return segment ? normalizeLocale(segment) : ''
+  } catch {
+    return ''
+  }
+}
+
+const resolveLocale = (context: ExportPageContext, responseUrl: string): string =>
+  localeFromUrl(responseUrl) ||
+  localeFromUrl(context.pageUrl) ||
+  normalizeLocale(context.locale) ||
+  'default'
+
+const cleanStoreName = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed) return 'restaurant'
+
+  const withoutProviderSuffix = trimmed.replace(
+    /\s*(?:[-|·]\s*)(?:GrabFood|Grab|DeliveryK)(?:\s.*)?$/i,
+    '',
+  ).trim()
+
+  return withoutProviderSuffix || trimmed
+}
+
+const readPageContext = async (tabId: number): Promise<ExportPageContext> => {
+  try {
+    const result = await chrome.debugger.sendCommand(
+      { tabId },
+      'Runtime.evaluate',
+      {
+        expression: `(() => {
+          const text = value => typeof value === 'string' ? value.trim() : '';
+          const h1 = text(document.querySelector('h1')?.textContent);
+          const ogTitle = text(document.querySelector('meta[property="og:title"]')?.getAttribute('content'));
+          return {
+            storeName: h1 || ogTitle || text(document.title),
+            locale: text(document.documentElement.lang) || text(navigator.language),
+            pageUrl: location.href,
+          };
+        })()`,
+        returnByValue: true,
+      },
+    ) as { result?: { value?: ExportPageContext } }
+
+    return result.result?.value ?? { storeName: '', locale: '', pageUrl: '' }
+  } catch {
+    return { storeName: '', locale: '', pageUrl: '' }
+  }
 }
 
 const failExport = async (state: CaptureState, error: unknown) => {
   await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
+  await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
   const next: CaptureState = {
     capturing: false,
     exporting: false,
@@ -97,6 +187,9 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
     await chrome.debugger.attach({ tabId }, DEBUGGER_VERSION)
     await chrome.debugger.sendCommand({ tabId }, 'Network.enable')
 
+    const context = await readPageContext(tabId)
+    await chrome.storage.local.set({ [EXPORT_CONTEXT_KEY]: context })
+
     const next: CaptureState = {
       capturing: true,
       exporting: true,
@@ -111,6 +204,7 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
 
     return next
   } catch (error) {
+    await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
     const next: CaptureState = {
       capturing: false,
       exporting: false,
@@ -157,24 +251,33 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
     const parsed = parseMenuResponse(responseUrl, payload)
     if (!parsed || parsed.categories.length === 0) return
 
+    const context = await getExportPageContext()
+    const enriched = {
+      ...parsed,
+      storeName: cleanStoreName(context.storeName),
+      locale: resolveLocale(context, responseUrl),
+    }
+
     await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
     await setState({
       capturing: false,
       exporting: true,
       phase: 'writing',
       tabId: source.tabId,
-      lastCapture: parsed,
+      lastCapture: enriched,
     })
     await detach(source.tabId)
 
     try {
       const config = await getAppsScriptConfig()
-      const resultSheet = await exportMenuViaAppsScript(parsed, getSpreadsheetTitle(parsed), config)
+      const resultSheet = await exportMenuViaAppsScript(enriched, config)
+      await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+
       const doneState: CaptureState = {
         capturing: false,
         exporting: false,
         phase: 'done',
-        lastCapture: parsed,
+        lastCapture: enriched,
         lastSheetUrl: resultSheet.spreadsheetUrl,
       }
       await setState(doneState)
@@ -184,7 +287,7 @@ const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => 
         capturing: false,
         exporting: true,
         phase: 'writing',
-        lastCapture: parsed,
+        lastCapture: enriched,
       }, error)
     }
   } catch {
@@ -201,6 +304,7 @@ chrome.debugger.onDetach.addListener(source => {
     const state = await getState()
     if (source.tabId === state.tabId && state.capturing) {
       await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
+      await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
       await setState({
         capturing: false,
         exporting: false,
@@ -220,6 +324,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
     const state = await getState()
     if (!state.exporting || !state.capturing || state.phase !== 'capturing') return
 
+    await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
     const timeoutState: CaptureState = {
       capturing: false,
       exporting: false,
