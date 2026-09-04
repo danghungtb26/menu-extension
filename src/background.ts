@@ -450,11 +450,8 @@ const processCompletedResponse = async (
   }
 }
 
-const rememberResponse = async (source: chrome.debugger.Debuggee, params: any) => {
+const rememberResponse = (source: chrome.debugger.Debuggee, params: any) => {
   if (source.tabId === undefined) return
-
-  const state = await getState()
-  if (!state.capturing || !state.exporting || state.tabId !== source.tabId) return
 
   const requestId = String(params?.requestId ?? '')
   const responseUrl = params?.response?.url as string | undefined
@@ -493,7 +490,7 @@ const forgetFailedResponse = (source: chrome.debugger.Debuggee, params: any) => 
 }
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (method === 'Network.responseReceived') void rememberResponse(source, params)
+  if (method === 'Network.responseReceived') rememberResponse(source, params)
   if (method === 'Network.loadingFinished') void handleLoadingFinished(source, params)
   if (method === 'Network.loadingFailed') forgetFailedResponse(source, params)
 })
