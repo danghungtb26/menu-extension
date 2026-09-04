@@ -1,5 +1,5 @@
 import { exportMenuViaAppsScript, validateAppsScriptConfig } from './appsScript'
-import { fetchDeliveryKLocaleMenus } from './deliverykLocales'
+import { fetchDeliveryKLocaleMenus, findLatestDeliveryKShopPageUrl } from './deliverykLocales'
 import { isSupportedDomain, parseMenuResponse } from './parsers'
 import type { AppsScriptConfig, CaptureState, ParsedMenu, RuntimeRequest, RuntimeResponse } from './types'
 
@@ -121,6 +121,23 @@ const cleanStoreName = (value: string): string => {
   return withoutProviderSuffix || trimmed
 }
 
+const isDeliveryKPage = (value: string): boolean => {
+  try {
+    return /(^|\.)deliveryk\.com$/i.test(new URL(value).hostname)
+  } catch {
+    return false
+  }
+}
+
+const isDeliveryKCategoryPage = (value: string): boolean => {
+  try {
+    const url = new URL(value)
+    return /(^|\.)deliveryk\.com$/i.test(url.hostname) && url.pathname.includes('/category-shops')
+  } catch {
+    return false
+  }
+}
+
 const readPageContext = async (tabId: number): Promise<ExportPageContext> => {
   try {
     const result = await chrome.debugger.sendCommand(
@@ -147,6 +164,25 @@ const readPageContext = async (tabId: number): Promise<ExportPageContext> => {
   }
 }
 
+const readLoadedResourceUrls = async (tabId: number): Promise<string[]> => {
+  try {
+    const result = await chrome.debugger.sendCommand(
+      { tabId },
+      'Runtime.evaluate',
+      {
+        expression: `performance.getEntriesByType('resource').map(entry => entry.name)`,
+        returnByValue: true,
+      },
+    ) as { result?: { value?: unknown } }
+
+    return Array.isArray(result.result?.value)
+      ? result.result.value.filter((value): value is string => typeof value === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
 const failExport = async (state: CaptureState, error: unknown) => {
   await chrome.alarms.clear(EXPORT_TIMEOUT_ALARM)
   await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
@@ -161,6 +197,67 @@ const failExport = async (state: CaptureState, error: unknown) => {
   }
   await setState(next)
   await detach(state.tabId)
+}
+
+const exportMenus = async (
+  menus: ParsedMenu[],
+  preferredMenu: ParsedMenu,
+  tabId: number,
+): Promise<void> => {
+  const config = await getAppsScriptConfig()
+  let spreadsheetUrl = ''
+
+  for (const menu of menus) {
+    const result = await exportMenuViaAppsScript(menu, config)
+    spreadsheetUrl = result.spreadsheetUrl
+  }
+
+  await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+
+  const doneState: CaptureState = {
+    capturing: false,
+    exporting: false,
+    phase: 'done',
+    lastCapture: preferredMenu,
+    lastSheetUrl: spreadsheetUrl,
+    lastExportedLocales: menus.map(menu => menu.locale || 'default'),
+  }
+  await setState(doneState)
+
+  if (spreadsheetUrl) {
+    await chrome.tabs.create({ url: spreadsheetUrl })
+  }
+
+  await detach(tabId)
+}
+
+const exportLoadedDeliveryKShop = async (
+  tabId: number,
+  sourceUrl: string,
+  context: ExportPageContext,
+): Promise<CaptureState> => {
+  const storeName = cleanStoreName(context.storeName)
+  const currentLocale = normalizeLocale(context.locale) || 'vi'
+
+  const writingState: CaptureState = {
+    capturing: false,
+    exporting: true,
+    phase: 'writing',
+    tabId,
+  }
+  await setState(writingState)
+  await detach(tabId)
+
+  try {
+    const menus = await fetchDeliveryKLocaleMenus(sourceUrl, storeName)
+    const preferredLanguage = currentLocale.split('-')[0]
+    const preferredMenu = menus.find(menu => menu.locale === preferredLanguage) ?? menus[0]
+    await exportMenus(menus, preferredMenu, tabId)
+    return await getState()
+  } catch (error) {
+    await failExport(writingState, error)
+    return await getState()
+  }
 }
 
 const startExport = async (tabId: number, config: AppsScriptConfig): Promise<CaptureState> => {
@@ -192,6 +289,31 @@ const startExport = async (tabId: number, config: AppsScriptConfig): Promise<Cap
 
     const context = await readPageContext(tabId)
     await chrome.storage.local.set({ [EXPORT_CONTEXT_KEY]: context })
+
+    if (isDeliveryKPage(context.pageUrl)) {
+      const resourceUrls = await readLoadedResourceUrls(tabId)
+      const loadedShopUrl = findLatestDeliveryKShopPageUrl(resourceUrls)
+
+      if (loadedShopUrl) {
+        return await exportLoadedDeliveryKShop(tabId, loadedShopUrl, context)
+      }
+
+      if (isDeliveryKCategoryPage(context.pageUrl)) {
+        const next: CaptureState = {
+          capturing: false,
+          exporting: false,
+          phase: 'error',
+          lastCapture: previous.lastCapture,
+          lastSheetUrl: previous.lastSheetUrl,
+          lastExportedLocales: previous.lastExportedLocales,
+          error: 'Open a DeliveryK restaurant from this list first, then click Export. No loaded shop-page API was found.',
+        }
+        await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
+        await setState(next)
+        await detach(tabId)
+        return next
+      }
+    }
 
     const next: CaptureState = {
       capturing: true,
@@ -225,38 +347,6 @@ const decodeBody = (body: string, base64Encoded?: boolean): string => {
   const binary = atob(body)
   const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
   return new TextDecoder().decode(bytes)
-}
-
-const exportMenus = async (
-  menus: ParsedMenu[],
-  preferredMenu: ParsedMenu,
-  tabId: number,
-): Promise<void> => {
-  const config = await getAppsScriptConfig()
-  let spreadsheetUrl = ''
-
-  for (const menu of menus) {
-    const result = await exportMenuViaAppsScript(menu, config)
-    spreadsheetUrl = result.spreadsheetUrl
-  }
-
-  await chrome.storage.local.remove(EXPORT_CONTEXT_KEY)
-
-  const doneState: CaptureState = {
-    capturing: false,
-    exporting: false,
-    phase: 'done',
-    lastCapture: preferredMenu,
-    lastSheetUrl: spreadsheetUrl,
-    lastExportedLocales: menus.map(menu => menu.locale || 'default'),
-  }
-  await setState(doneState)
-
-  if (spreadsheetUrl) {
-    await chrome.tabs.create({ url: spreadsheetUrl })
-  }
-
-  await detach(tabId)
 }
 
 const handleResponse = async (source: chrome.debugger.Debuggee, params: any) => {
