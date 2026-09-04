@@ -7,6 +7,13 @@ interface AppsScriptResponse {
   error?: string
 }
 
+export interface ExportIdentity {
+  site: string
+  storeName: string
+  locale: string
+  restaurantId: string
+}
+
 const normalizeEndpoint = (endpoint: string): string => endpoint.trim()
 
 export const validateAppsScriptConfig = (config: AppsScriptConfig) => {
@@ -29,12 +36,19 @@ export const validateAppsScriptConfig = (config: AppsScriptConfig) => {
   if (!config.secret.trim()) throw new Error('Apps Script secret is required.')
 }
 
+export const getExportIdentity = (menu: ParsedMenu): ExportIdentity => ({
+  site: menu.provider === 'grab' ? 'Grab' : 'DeliveryK',
+  storeName: menu.storeName?.trim() || 'restaurant',
+  locale: menu.locale?.trim() || 'default',
+  restaurantId: menu.restaurantId?.trim() || 'unknown',
+})
+
 export const exportMenuViaAppsScript = async (
   menu: ParsedMenu,
-  title: string,
   config: AppsScriptConfig,
 ): Promise<{ spreadsheetUrl: string }> => {
   validateAppsScriptConfig(config)
+  const identity = getExportIdentity(menu)
 
   const response = await fetch(normalizeEndpoint(config.endpoint), {
     method: 'POST',
@@ -43,9 +57,7 @@ export const exportMenuViaAppsScript = async (
     },
     body: JSON.stringify({
       secret: config.secret,
-      title: title.trim() || `Menu ${menu.provider} ${new Date().toISOString().slice(0, 10)}`,
-      provider: menu.provider,
-      restaurantId: menu.restaurantId ?? '',
+      ...identity,
       sourceUrl: menu.sourceUrl,
       menu: flattenMenuSheet(menu),
       toppings: flattenToppingsSheet(menu),
