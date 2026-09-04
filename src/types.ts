@@ -1,4 +1,5 @@
 export type Provider = 'grab' | 'deliveryk'
+export type ExportPhase = 'idle' | 'capturing' | 'writing' | 'done' | 'error'
 
 export interface MenuModifier {
   id: string
@@ -46,16 +47,17 @@ export interface CaptureSummary {
 
 export interface CaptureState {
   capturing: boolean
+  exporting: boolean
+  phase: ExportPhase
   tabId?: number
   lastCapture?: ParsedMenu
+  lastSheetUrl?: string
   error?: string
 }
 
 export type RuntimeRequest =
   | { type: 'GET_STATE' }
-  | { type: 'START_CAPTURE'; tabId: number }
-  | { type: 'STOP_CAPTURE' }
-  | { type: 'CLEAR_CAPTURE' }
+  | { type: 'EXPORT_CURRENT_TAB'; tabId: number }
 
 export interface RuntimeResponse {
   ok: boolean
