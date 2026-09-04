@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Menu Extractor to Google Sheets",
   "version": "0.1.0",
-  "description": "Capture restaurant menu APIs from Grab and DeliveryK, then export them to Google Sheets.",
-  "permissions": ["activeTab", "debugger", "storage", "identity"],
+  "description": "Export restaurant menu APIs from Grab and DeliveryK directly to Google Sheets on demand.",
+  "permissions": ["activeTab", "debugger", "storage", "identity", "alarms"],
   "host_permissions": [
     "https://*.grab.com/*",
     "https://*.deliveryk.com/*",
