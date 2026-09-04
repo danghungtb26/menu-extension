@@ -45,6 +45,11 @@ export interface CaptureSummary {
   toppings: number
 }
 
+export interface AppsScriptConfig {
+  endpoint: string
+  secret: string
+}
+
 export interface CaptureState {
   capturing: boolean
   exporting: boolean
@@ -57,7 +62,7 @@ export interface CaptureState {
 
 export type RuntimeRequest =
   | { type: 'GET_STATE' }
-  | { type: 'EXPORT_CURRENT_TAB'; tabId: number }
+  | { type: 'EXPORT_CURRENT_TAB'; tabId: number; config: AppsScriptConfig }
 
 export interface RuntimeResponse {
   ok: boolean
