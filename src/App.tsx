@@ -142,7 +142,7 @@ export const App = () => {
         </button>
 
         <p className="mt-3 text-xs leading-5 text-slate-500">
-          Export writes into the Google Sheet bound to your Apps Script. Each store locale gets its own deterministic tabs, so exporting the same locale again updates those tabs instead of creating duplicates.
+          DeliveryK exports vi, en, ko, ja, zh and th automatically by calling the same menu API with a different locale header. Grab exports the currently loaded locale.
         </p>
       </section>
 
@@ -170,6 +170,16 @@ export const App = () => {
               </code>
             )}
           </div>
+
+          {state.lastExportedLocales && state.lastExportedLocales.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {state.lastExportedLocales.map(locale => (
+                <span key={locale} className="rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700">
+                  {locale}
+                </span>
+              ))}
+            </div>
+          )}
 
           <div className="mt-3 grid grid-cols-4 gap-2">
             {[
