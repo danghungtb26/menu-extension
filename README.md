@@ -12,17 +12,51 @@ Supported providers:
 The extension does **not** capture network traffic continuously.
 
 1. Open a supported restaurant page.
-2. Choose the locale/language you want on that website.
-3. Open the extension popup.
-4. Click **Export**.
-5. The background service worker attaches `chrome.debugger` to the current tab and reloads it once.
-6. The first supported menu API response is parsed and normalized.
-7. The extension reads page metadata such as store name and locale.
-8. Network capture stops immediately after the menu is found.
+2. Open the extension popup.
+3. Click **Export**.
+4. The background service worker attaches `chrome.debugger` to the current tab and reloads it once.
+5. The first supported menu API response is parsed and normalized.
+6. The extension reads page metadata such as store name and locale.
+7. Network capture stops immediately after the menu is found.
+8. Provider-specific locale export runs.
 9. The normalized rows are POSTed to the configured Apps Script Web App.
 10. Apps Script writes the rows into the Google Sheet that owns the script.
 
 If no supported menu response is detected within 30 seconds, capture is stopped automatically and the popup shows an error.
+
+## DeliveryK: one-click all-locale export
+
+DeliveryK uses the request header `locale` to select menu language. After the extension detects the shop-page API once, it calls the same endpoint directly for these locales:
+
+```text
+vi
+en
+ko
+ja
+zh
+th
+```
+
+For example, the URL remains unchanged:
+
+```text
+https://api.deliveryk.com/api/shop-page/{restaurantId}/index?width=1825
+```
+
+and only the header changes:
+
+```text
+locale: vi
+locale: en
+locale: ko
+locale: ja
+locale: zh
+locale: th
+```
+
+So a single **Export** click creates or updates all six locale tab pairs without changing the website language or reloading the page six times.
+
+Grab currently exports the locale loaded by the website.
 
 ## Locale-aware sheet names
 
@@ -32,23 +66,20 @@ Each store/locale gets deterministic worksheet names based on:
 web-storeName-locale-restaurantId
 ```
 
-Example:
+Example for DeliveryK:
 
 ```text
-Grab-Pho 24-vi-VN-merchant-123
-Grab-Pho 24-vi-VN-merchant-123-toppings
+DeliveryK-Pho 24-vi-123
+DeliveryK-Pho 24-vi-123-toppings
+DeliveryK-Pho 24-en-123
+DeliveryK-Pho 24-en-123-toppings
+DeliveryK-Pho 24-ko-123
+DeliveryK-Pho 24-ko-123-toppings
 ```
 
-If the same restaurant is exported again with the same locale, those two tabs are cleared and rewritten.
+If the same restaurant is exported again, the matching tabs are cleared and rewritten instead of duplicated.
 
-If the website is switched to another locale and exported again, another pair of tabs is created, for example:
-
-```text
-Grab-Pho 24-en-US-merchant-123
-Grab-Pho 24-en-US-merchant-123-toppings
-```
-
-This allows one bound spreadsheet to keep multiple locale versions for the same restaurant without overwriting each other.
+This allows one bound spreadsheet to keep multiple locale versions for the same restaurant without overwriting other locales.
 
 Google Sheets worksheet names are sanitized and truncated to the 100-character limit when necessary.
 
@@ -110,6 +141,8 @@ Matches shop-page responses similar to:
 https://api.deliveryk.com/api/shop-page/{restaurantId}/index
 ```
 
+After detecting the endpoint, the extension directly fetches it once per supported locale using the `locale` request header.
+
 ### Grab
 
 Grab endpoints can change, so the parser does not depend on one hard-coded API path. For JSON responses on `*.grab.com`, it searches nested response data for category arrays containing menu items and normalizes Grab fields such as `ID`, `priceInMinorUnit`, `modifierGroups`, and `modifiers`.
@@ -119,7 +152,8 @@ Grab endpoints can change, so the parser does not depend on one hard-coded API p
 Before reloading the page, the extension captures page metadata through Chrome DevTools Protocol:
 
 - store name: page `h1`, then Open Graph title, then document title
-- locale: API/page URL locale parameter or locale path segment when available, then `<html lang>`, then browser language
+- Grab locale: API/page URL locale parameter or locale path segment when available, then `<html lang>`, then browser language
+- DeliveryK locale: explicitly assigned from the `locale` request header for each generated export
 - restaurant ID: provider API URL
 
 The detected metadata is attached to the normalized menu before export.
@@ -141,13 +175,14 @@ Chrome displays a strong warning for the `debugger` permission. The extension at
 
 ```text
 apps-script/
-  Code.gs             Bound Apps Script Web App writer
+  Code.gs                 Bound Apps Script Web App writer
 src/
-  background.ts       One-click capture + page metadata workflow
-  appsScript.ts       Apps Script Web App client
-  flatten.ts          Sheet row generation
+  background.ts           One-click capture + provider export workflow
+  appsScript.ts           Apps Script Web App client
+  deliverykLocales.ts     DeliveryK locale-header requests
+  flatten.ts              Sheet row generation
   parsers/
     deliveryk.ts
     grab.ts
-  App.tsx             Popup configuration + Export button
+  App.tsx                 Popup configuration + Export button
 ```
