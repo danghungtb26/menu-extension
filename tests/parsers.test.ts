@@ -98,13 +98,14 @@ describe('menu parsers', () => {
     expect(getCaptureSummary(parsed!).toppings).toBe(1)
   })
 
-  it('flattens topping rows with readable repeated-field suppression', () => {
+  it('flattens topping rows with readable repeated-field suppression and image preview', () => {
     const parsed = parseGrab('https://portal.grab.com/foodweb/guest/v2/merchants/x', [{
       ID: 'c',
       name: 'Category',
       items: [{
         ID: 'i',
         name: 'Item',
+        imgHref: 'https://image.test/item.jpg',
         priceInMinorUnit: 100,
         modifierGroups: [{ ID: 'g', name: 'Group', modifiers: [
           { ID: 'a', name: 'A', priceInMinorUnit: 10 },
@@ -115,9 +116,13 @@ describe('menu parsers', () => {
 
     const rows = flattenToppingsSheet(parsed)
     expect(rows).toHaveLength(3)
+    expect(rows[0][8]).toBe('product_thumb_preview')
     expect(rows[1][3]).toBe('i')
+    expect(rows[1][7]).toBe('https://image.test/item.jpg')
+    expect(rows[1][8]).toBe('=IFERROR(IMAGE("https://image.test/item.jpg",1),"")')
     expect(rows[2][3]).toBe('')
-    expect(rows[2][11]).toBe('b')
+    expect(rows[2][8]).toBe('')
+    expect(rows[2][12]).toBe('b')
   })
 
   it('keeps the full topping schema when a product has no toppings', () => {
@@ -139,8 +144,9 @@ describe('menu parsers', () => {
     const rows = flattenToppingsSheet(parsed)
 
     expect(rows).toHaveLength(2)
-    expect(rows[0]).toHaveLength(14)
-    expect(rows[1]).toHaveLength(14)
-    expect(rows[1].slice(8)).toEqual(['', '', '', '', '', ''])
+    expect(rows[0]).toHaveLength(15)
+    expect(rows[1]).toHaveLength(15)
+    expect(rows[1][8]).toBe('')
+    expect(rows[1].slice(9)).toEqual(['', '', '', '', '', ''])
   })
 })
