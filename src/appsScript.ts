@@ -1,0 +1,71 @@
+import { flattenMenuSheet, flattenToppingsSheet } from './flatten'
+import type { AppsScriptConfig, ParsedMenu } from './types'
+
+interface AppsScriptResponse {
+  success?: boolean
+  spreadsheetUrl?: string
+  error?: string
+}
+
+const normalizeEndpoint = (endpoint: string): string => endpoint.trim()
+
+export const validateAppsScriptConfig = (config: AppsScriptConfig) => {
+  const endpoint = normalizeEndpoint(config.endpoint)
+  if (!endpoint) throw new Error('Apps Script Web App URL is required.')
+
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    throw new Error('Apps Script Web App URL is invalid.')
+  }
+
+  const isAppsScriptHost = url.hostname === 'script.google.com'
+  const isWebAppPath = /^\/macros\/s\/[^/]+\/(exec|dev)$/.test(url.pathname)
+  if (!isAppsScriptHost || !isWebAppPath) {
+    throw new Error('Use a deployed Apps Script Web App URL ending in /exec or /dev.')
+  }
+
+  if (!config.secret.trim()) throw new Error('Apps Script secret is required.')
+}
+
+export const exportMenuViaAppsScript = async (
+  menu: ParsedMenu,
+  title: string,
+  config: AppsScriptConfig,
+): Promise<{ spreadsheetUrl: string }> => {
+  validateAppsScriptConfig(config)
+
+  const response = await fetch(normalizeEndpoint(config.endpoint), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8',
+    },
+    body: JSON.stringify({
+      secret: config.secret,
+      title: title.trim() || `Menu ${menu.provider} ${new Date().toISOString().slice(0, 10)}`,
+      provider: menu.provider,
+      restaurantId: menu.restaurantId ?? '',
+      sourceUrl: menu.sourceUrl,
+      menu: flattenMenuSheet(menu),
+      toppings: flattenToppingsSheet(menu),
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Apps Script export failed with HTTP ${response.status}.`)
+  }
+
+  const text = await response.text()
+  let result: AppsScriptResponse
+  try {
+    result = JSON.parse(text) as AppsScriptResponse
+  } catch {
+    throw new Error(`Apps Script returned an invalid response: ${text.slice(0, 160)}`)
+  }
+
+  if (!result.success) throw new Error(result.error || 'Apps Script export failed.')
+  if (!result.spreadsheetUrl) throw new Error('Apps Script did not return spreadsheetUrl.')
+
+  return { spreadsheetUrl: result.spreadsheetUrl }
+}
