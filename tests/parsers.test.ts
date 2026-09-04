@@ -76,4 +76,28 @@ describe('menu parsers', () => {
     expect(rows[2][3]).toBe('')
     expect(rows[2][11]).toBe('b')
   })
+
+  it('keeps the full topping schema when a product has no toppings', () => {
+    const parsed = parseDeliveryK('https://api.deliveryk.com/api/shop-page/42/index?width=1825', {
+      product_categories_data: {
+        product_categories: [{
+          id: 1,
+          name: 'Rice',
+          products: [{
+            id: 10,
+            name: 'Plain rice',
+            price: 30000,
+            option_sets: [],
+          }],
+        }],
+      },
+    })!
+
+    const rows = flattenToppingsSheet(parsed)
+
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveLength(14)
+    expect(rows[1]).toHaveLength(14)
+    expect(rows[1].slice(8)).toEqual(['', '', '', '', '', ''])
+  })
 })
