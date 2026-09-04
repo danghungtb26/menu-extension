@@ -59,6 +59,7 @@ export interface CaptureState {
   tabId?: number
   lastCapture?: ParsedMenu
   lastSheetUrl?: string
+  lastExportedLocales?: string[]
   error?: string
 }
 
