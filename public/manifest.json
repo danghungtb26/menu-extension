@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Menu Extractor to Google Sheets",
+  "version": "0.1.0",
+  "description": "Capture restaurant menu APIs from Grab, DeliveryK and Capichi, then export them to Google Sheets.",
+  "permissions": ["activeTab", "debugger", "storage", "identity"],
+  "host_permissions": [
+    "https://*.grab.com/*",
+    "https://*.deliveryk.com/*",
+    "https://*.capichiapp.com/*",
+    "https://sheets.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "Menu Extractor"
+  },
+  "oauth2": {
+    "client_id": "REPLACE_ME.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/spreadsheets"]
+  }
+}
