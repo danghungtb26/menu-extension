@@ -14,27 +14,25 @@ The extension does **not** capture network traffic continuously.
 1. Open a supported restaurant page.
 2. Open the extension popup.
 3. Click **Export**.
-4. The background service worker attaches `chrome.debugger` to the current tab and reloads it once.
-5. The first supported menu API response is parsed and normalized.
-6. The extension reads page metadata such as store name and locale.
-7. Network capture stops immediately after the menu is found.
-8. Provider-specific locale export runs.
-9. The normalized rows are POSTed to the configured Apps Script Web App.
-10. Apps Script writes the rows into the Google Sheet that owns the script.
+4. The background service worker captures or resolves the restaurant menu API.
+5. The menu is parsed and normalized.
+6. Provider-specific locale export runs.
+7. A single full-schema row set is POSTed to the configured Apps Script Web App for each locale.
+8. Apps Script writes one worksheet per store/locale into the Google Sheet that owns the script.
 
-If no supported menu response is detected within 30 seconds, capture is stopped automatically and the popup shows an error.
+The export schema always includes product and topping columns.
+
+If a product has no topping groups or toppings, the product is still exported and all topping columns are left blank. No separate menu-only worksheet is created.
 
 ## DeliveryK: one-click all-locale export
 
-DeliveryK uses the request header `locale` to select menu language. After the extension detects the shop-page API once, it calls the same endpoint directly for these locales:
+DeliveryK uses the request header `locale` to select menu language. The extension calls the same shop-page endpoint directly for these locales:
 
 ```text
 vi
 en
 ko
 ja
-zh
-th
 ```
 
 For example, the URL remains unchanged:
@@ -50,17 +48,21 @@ locale: vi
 locale: en
 locale: ko
 locale: ja
-locale: zh
-locale: th
 ```
 
-So a single **Export** click creates or updates all six locale tab pairs without changing the website language or reloading the page six times.
+A direct DeliveryK shop page such as:
+
+```text
+https://www.deliveryk.com/shops/14512
+```
+
+provides the restaurant ID directly, so the extension can build the API URL without waiting for a network response.
 
 Grab currently exports the locale loaded by the website.
 
 ## Locale-aware sheet names
 
-Each store/locale gets deterministic worksheet names based on:
+Each store/locale gets exactly one deterministic worksheet name based on:
 
 ```text
 web-storeName-locale-restaurantId
@@ -70,16 +72,35 @@ Example for DeliveryK:
 
 ```text
 DeliveryK-Pho 24-vi-123
-DeliveryK-Pho 24-vi-123-toppings
 DeliveryK-Pho 24-en-123
-DeliveryK-Pho 24-en-123-toppings
 DeliveryK-Pho 24-ko-123
-DeliveryK-Pho 24-ko-123-toppings
+DeliveryK-Pho 24-ja-123
 ```
 
-If the same restaurant is exported again, the matching tabs are cleared and rewritten instead of duplicated.
+Each worksheet always uses the full schema:
 
-This allows one bound spreadsheet to keep multiple locale versions for the same restaurant without overwriting other locales.
+```text
+category_id
+category_name
+category_desc
+product_id
+product_name
+product_price
+product_desc
+product_thumb
+topping_type_id
+topping_type_name
+topping_type_type
+topping_id
+topping_name
+topping_price
+```
+
+If a product has no toppings, columns from `topping_type_id` through `topping_price` are blank.
+
+If the same restaurant/locale is exported again, the matching worksheet is cleared and rewritten instead of duplicated.
+
+For compatibility with older exports, Apps Script removes the old generated `-toppings` worksheet after successfully writing the new single worksheet.
 
 Google Sheets worksheet names are sanitized and truncated to the 100-character limit when necessary.
 
@@ -131,17 +152,25 @@ SpreadsheetApp.getActiveSpreadsheet()
 
 so no spreadsheet ID is required when the script is created from the target Google Sheet.
 
+When `Code.gs` changes, create a new deployment version so the `/exec` URL runs the latest code.
+
 ## Capture behavior
 
 ### DeliveryK
 
-Matches shop-page responses similar to:
+Direct shop pages are supported, for example:
 
 ```text
-https://api.deliveryk.com/api/shop-page/{restaurantId}/index
+https://www.deliveryk.com/shops/14512
 ```
 
-After detecting the endpoint, the extension directly fetches it once per supported locale using the `locale` request header.
+The API URL is built as:
+
+```text
+https://api.deliveryk.com/api/shop-page/14512/index?width=1825
+```
+
+The extension fetches it once per supported locale using the `locale` request header.
 
 ### Grab
 
@@ -149,14 +178,10 @@ Grab endpoints can change, so the parser does not depend on one hard-coded API p
 
 ## Store name and locale detection
 
-Before reloading the page, the extension captures page metadata through Chrome DevTools Protocol:
-
 - store name: page `h1`, then Open Graph title, then document title
 - Grab locale: API/page URL locale parameter or locale path segment when available, then `<html lang>`, then browser language
 - DeliveryK locale: explicitly assigned from the `locale` request header for each generated export
-- restaurant ID: provider API URL
-
-The detected metadata is attached to the normalized menu before export.
+- restaurant ID: direct DeliveryK `/shops/{id}` URL or provider API URL
 
 ## Price behavior
 
@@ -169,7 +194,7 @@ Prices are exported exactly as numeric values supplied by the provider API. Grab
 - `storage`: persist Apps Script configuration and export progress.
 - `alarms`: stop a capture automatically after 30 seconds if no menu is found.
 
-Chrome displays a strong warning for the `debugger` permission. The extension attaches only after the user clicks **Export** and detaches immediately after a menu is found, an error occurs, or the timeout expires.
+Chrome displays a strong warning for the `debugger` permission. The extension attaches only after the user clicks **Export** and detaches as soon as the required data is available or an error occurs.
 
 ## Project structure
 
@@ -180,7 +205,7 @@ src/
   background.ts           One-click capture + provider export workflow
   appsScript.ts           Apps Script Web App client
   deliverykLocales.ts     DeliveryK locale-header requests
-  flatten.ts              Sheet row generation
+  flatten.ts              Full product + topping row generation
   parsers/
     deliveryk.ts
     grab.ts
