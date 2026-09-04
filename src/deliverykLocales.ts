@@ -5,6 +5,19 @@ export const DELIVERYK_LOCALES = ['vi', 'en', 'ko', 'ja', 'zh', 'th'] as const
 
 export type DeliveryKLocale = (typeof DELIVERYK_LOCALES)[number]
 
+export const isDeliveryKShopPageUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value)
+    return /(^|\.)deliveryk\.com$/i.test(url.hostname) &&
+      /\/api\/shop-page\/[^/]+\/index(?:\/|$)/i.test(url.pathname)
+  } catch {
+    return false
+  }
+}
+
+export const findLatestDeliveryKShopPageUrl = (urls: string[]): string | undefined =>
+  [...urls].reverse().find(isDeliveryKShopPageUrl)
+
 export const fetchDeliveryKLocaleMenus = async (
   sourceUrl: string,
   storeName: string,
